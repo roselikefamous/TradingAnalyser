@@ -16,6 +16,10 @@ from strategies import strategy_bollinger_scalping, strategy_reversal, strategy_
 from ui_helpers import TERMINAL_CSS, render_signal_card, render_backtest_stats, render_equity_curve, render_strategy_rules, INDICATOR_GUIDE
 from streamlit_autorefresh import st_autorefresh
 from scanner import scan_all_assets, PREDEFINED_ASSETS
+from simulation import (
+    new_simulation_state, open_positions_from_scanner,
+    update_portfolio, get_current_equity, get_simulation_stats
+)
 
 st.set_page_config(page_title="Pro Trading Terminal", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
@@ -31,6 +35,7 @@ if 'portfolio' not in st.session_state:
         {"Symbol": "MSFT", "Shares": 30, "EntryPrice": 300.0}
     ])
 if 'journal' not in st.session_state: st.session_state.journal = ""
+if 'sim_state' not in st.session_state: st.session_state.sim_state = new_simulation_state()
 
 now = datetime.datetime.now()
 market_hrs = 9 <= now.hour <= 16
@@ -972,6 +977,182 @@ with tab5:
 
     if 'scanner_results' not in st.session_state:
         st.session_state['scanner_results'] = None
+
+    # ═══════════ SIMULATION SECTION ═══════════════════════════════
+    st.markdown("---")
+    st.markdown("## 📊 Paper Trading Simulation – Virtuelles Depot")
+    st.markdown("Kauft automatisch die Top-10 Scanner-Assets mit €100.000 Startkapital und trackt SL/TP-Hits gegen echte Kursdaten.")
+
+    sim = st.session_state.sim_state
+    stats = get_simulation_stats(sim)
+
+    # ── Depot KPI Row ──────────────────────────────────────────────
+    equity_color = '#26a69a' if stats['total_pnl'] >= 0 else '#ef5350'
+    pnl_arrow = '▲' if stats['total_pnl'] >= 0 else '▼'
+    sk1, sk2, sk3, sk4, sk5 = st.columns(5)
+    sk1.metric("💰 Startkapital", f"€{stats['start_capital']:,.0f}")
+    sk2.metric("📈 Aktueller Depotwert", f"€{stats['equity']:,.2f}",
+               delta=f"{pnl_arrow} {stats['total_pnl_pct']:+.2f}%")
+    sk3.metric("💵 Freies Cash", f"€{stats['cash']:,.2f}")
+    sk4.metric("📂 Offene Positionen", stats['open_positions'])
+    sk5.metric("🏆 Win Rate", f"{stats['win_rate']:.1f}%" if stats['closed_trades'] else "–",
+               delta=f"{stats['closed_trades']} Trades" if stats['closed_trades'] else None)
+
+    # ── Action Buttons ─────────────────────────────────────────────
+    sb1, sb2, sb3 = st.columns([2, 2, 1])
+
+    with sb1:
+        can_buy = st.session_state.get('scanner_results') is not None
+        buy_clicked = st.button(
+            "🛒 Top 10 kaufen (Simulation starten)",
+            type="primary",
+            use_container_width=True,
+            disabled=not can_buy,
+            help="Zuerst Scanner laufen lassen!"
+        )
+        if not can_buy:
+            st.caption("💡 Erst den Scanner oben ausführen, dann hier kaufen.")
+
+    with sb2:
+        update_clicked = st.button(
+            "🔄 Portfolio aktualisieren (SL/TP prüfen)",
+            use_container_width=True,
+            disabled=len(sim['positions']) == 0,
+        )
+
+    with sb3:
+        if st.button("🗑️ Reset", use_container_width=True):
+            st.session_state.sim_state = new_simulation_state()
+            st.rerun()
+
+    # ── Buy Top 10 ─────────────────────────────────────────────────
+    if buy_clicked and can_buy:
+        scan_df = st.session_state['scanner_results']
+        buy_progress = st.progress(0, text="🛒 Einstiegssignale werden berechnet...")
+
+        def buy_progress_cb(cur, tot, sym):
+            buy_progress.progress(cur / tot if tot > 0 else 1.0,
+                                   text=f"🛒 Signal für {sym}... ({cur}/{tot})")
+
+        new_state, opened = open_positions_from_scanner(
+            scan_df, sim, top_n=10, progress_callback=buy_progress_cb
+        )
+        st.session_state.sim_state = new_state
+        buy_progress.progress(1.0, text=f"✅ {opened} Positionen eröffnet!")
+        st.rerun()
+
+    # ── Update / SL-TP check ───────────────────────────────────────
+    if update_clicked:
+        upd_progress = st.progress(0, text="🔍 SL/TP wird geprüft...")
+
+        def upd_progress_cb(cur, tot, sym):
+            upd_progress.progress(cur / tot if tot > 0 else 1.0,
+                                   text=f"🔍 Prüfe {sym}... ({cur}/{tot})")
+
+        new_state, newly_closed = update_portfolio(sim, progress_callback=upd_progress_cb)
+        st.session_state.sim_state = new_state
+        upd_progress.progress(1.0, text=f"✅ {len(newly_closed)} neue Trade(s) geschlossen!")
+
+        if newly_closed:
+            for cl in newly_closed:
+                icon = '✅' if cl['result'] == 'TP' else '❌'
+                col = '#26a69a' if cl['pnl_eur'] > 0 else '#ef5350'
+                st.markdown(
+                    f"{icon} **{cl['symbol']}** – {cl['result']} getroffen am {cl['exit_date']} "
+                    f"| P&L: <span style='color:{col};font-weight:700;'>€{cl['pnl_eur']:+,.2f} ({cl['pnl_pct']:+.2f}%)</span>",
+                    unsafe_allow_html=True
+                )
+        st.rerun()
+
+    # ── Open Positions Table ───────────────────────────────────────
+    if sim['positions']:
+        st.markdown("### 📂 Offene Positionen")
+        for pos in sim['positions']:
+            cur_price = pos.get('current_price', pos['entry'])
+            unr_pnl = pos.get('unrealized_pnl', 0.0)
+            unr_pct = pos.get('unrealized_pnl_pct', 0.0)
+            unr_col = '#26a69a' if unr_pnl >= 0 else '#ef5350'
+            unr_arrow = '▲' if unr_pnl >= 0 else '▼'
+            sl_pct = ((pos['sl'] - pos['entry']) / pos['entry']) * 100
+            tp_pct = ((pos['tp'] - pos['entry']) / pos['entry']) * 100
+
+            card = f"""
+            <div style='border-left:4px solid #26a69a; background:rgba(38,166,154,0.06);
+                        padding:12px 18px; margin:5px 0; border-radius:8px;'>
+              <span style='font-size:16px;font-weight:700;'>{pos['symbol']}</span>
+              <span style='font-size:12px;color:#9e9e9e;margin-left:8px;'>{pos['name']}</span>
+              <span style='font-size:11px;color:#607d8b;margin-left:12px;'>{pos['strategy']}</span><br/>
+              <span style='font-size:12px;'>
+                Einstieg <b>${pos['entry']:,.4f}</b> &nbsp;|
+                Aktuell <b style='color:{unr_col};'>${cur_price:,.4f}</b> &nbsp;|
+                <span style='color:#ef5350;'>SL ${pos['sl']:,.4f} ({sl_pct:+.1f}%)</span> &nbsp;|
+                <span style='color:#26a69a;'>TP ${pos['tp']:,.4f} ({tp_pct:+.1f}%)</span><br/>
+                Anteile <b>{pos['shares']:.4f}</b> &nbsp;|
+                Investiert <b>€{pos['invest_eur']:,.2f}</b> &nbsp;|
+                Eröffnet <b>{pos['open_date']}</b> &nbsp;|
+                Unrealisiert <b style='color:{unr_col};'>{unr_arrow} €{unr_pnl:,.2f} ({unr_pct:+.2f}%)</b>
+              </span>
+            </div>
+            """
+            st.markdown(card, unsafe_allow_html=True)
+
+            if st.button(f"📊 {pos['symbol']} Chart laden", key=f"sim_load_{pos['symbol']}"):
+                st.session_state.tickers[0] = pos['symbol']
+                st.rerun()
+
+    # ── Closed Trades Table ────────────────────────────────────────
+    if sim['closed_trades']:
+        st.markdown("### 📋 Abgeschlossene Trades")
+        rows = []
+        for t in reversed(sim['closed_trades']):
+            rows.append({
+                "Symbol":     t['symbol'],
+                "Name":       t['name'],
+                "Einstieg":   f"${t['entry']:,.4f}",
+                "Ausstieg":   f"${t['exit_date']} @ ${t['exit_price']:,.4f}",
+                "Grund":      f"✅ TP" if t['result'] == 'TP' else f"❌ SL",
+                "P&L €":      f"{t['pnl_eur']:+,.2f}",
+                "P&L %":      f"{t['pnl_pct']:+.2f}%",
+                "Strategie":  t['strategy'],
+            })
+        closed_df = pd.DataFrame(rows)
+        st.dataframe(closed_df, use_container_width=True, hide_index=True)
+
+    # ── Equity Curve Chart ─────────────────────────────────────────
+    if len(sim['equity_history']) >= 2:
+        st.markdown("### 📈 Equity-Kurve")
+        eq_df = pd.DataFrame(sim['equity_history'])
+        eq_df['date'] = pd.to_datetime(eq_df['date'])
+        eq_df = eq_df.sort_values('date')
+
+        import plotly.graph_objects as go_sim
+        fig_eq = go_sim.Figure()
+        fig_eq.add_trace(go_sim.Scatter(
+            x=eq_df['date'], y=eq_df['equity'],
+            mode='lines+markers',
+            line=dict(color='#26a69a', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(38,166,154,0.08)',
+            name='Depotwert'
+        ))
+        fig_eq.add_hline(
+            y=sim['start_capital'],
+            line_dash='dash', line_color='#607d8b',
+            annotation_text='Startkapital €100k'
+        )
+        fig_eq.update_layout(
+            template='plotly_dark',
+            paper_bgcolor='#0e1117',
+            plot_bgcolor='#0e1117',
+            height=300,
+            margin=dict(l=40, r=20, t=20, b=30),
+            xaxis=dict(title='Datum', gridcolor='#1e1e1e'),
+            yaxis=dict(title='Depotwert (€)', gridcolor='#1e1e1e'),
+        )
+        st.plotly_chart(fig_eq, use_container_width=True)
+    elif not sim['positions'] and not sim['closed_trades']:
+        st.info("💡 Führe zuerst den Scanner aus und kaufe die Top 10, um das Depot zu starten.")
+
 
 # ======= TAB 6: STRATEGY SIGNALS =======
 with tab6:
