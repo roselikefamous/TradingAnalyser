@@ -36,6 +36,13 @@ if 'portfolio' not in st.session_state:
     ])
 if 'journal' not in st.session_state: st.session_state.journal = ""
 if 'sim_state' not in st.session_state: st.session_state.sim_state = new_simulation_state()
+# — Phase 8 new state —
+if 'expert_mode' not in st.session_state: st.session_state.expert_mode = True
+if 'depot_size' not in st.session_state: st.session_state.depot_size = 10000.0
+if 'morning_scan_date' not in st.session_state: st.session_state.morning_scan_date = None
+if 'signal_scores_cache' not in st.session_state: st.session_state.signal_scores_cache = {}
+if 'sltp_alerted' not in st.session_state: st.session_state.sltp_alerted = set()
+if 'quick_search' not in st.session_state: st.session_state.quick_search = ""
 
 now = datetime.datetime.now()
 market_hrs = 9 <= now.hour <= 16
@@ -44,10 +51,59 @@ st.markdown(f'<div class="watermark">{st.session_state.tickers[0]}</div>', unsaf
 st.markdown('<button class="fab-btn" title="Quick Trade">⚡</button>', unsafe_allow_html=True)
 st.markdown(f'<div class="live-clock">{now.strftime("%H:%M:%S")} | {market_status}</div>', unsafe_allow_html=True)
 
+# ── Phase 8: SL/TP Toast Alerts (check on every load) ─────────────────────────
+_sim = st.session_state.sim_state
+for _pos in _sim.get('positions', []):
+    _sym = _pos['symbol']
+    _alert_key = f"{_sym}_{_pos['open_date']}"
+    if _alert_key in st.session_state.sltp_alerted:
+        continue
+    try:
+        _cur = yf.Ticker(_sym).fast_info['lastPrice']
+        if _cur <= _pos['sl']:
+            st.toast(f"🛑 SL getriggert: {_sym} fiel auf ${_cur:.2f} (SL war ${_pos['sl']:.2f})", icon="🔴")
+            st.session_state.sltp_alerted.add(_alert_key)
+        elif _cur >= _pos['tp']:
+            st.toast(f"🎯 TP erreicht! {_sym} stieg auf ${_cur:.2f} (TP war ${_pos['tp']:.2f})", icon="🟢")
+            st.session_state.sltp_alerted.add(_alert_key)
+    except:
+        pass
+
+# ── Phase 8: Morning Auto-Scan (09:00–10:00 once per day) ─────────────────────
+_today_str = now.strftime("%Y-%m-%d")
+if (9 <= now.hour < 10 and now.weekday() < 5 and
+        st.session_state.morning_scan_date != _today_str and
+        st.session_state.get('scanner_results') is None):
+    st.session_state['scanner_running'] = True
+    st.session_state.morning_scan_date = _today_str
+    st.toast("🌅 Morgenscan läuft automatisch...", icon="📡")
+
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.title("⚙️ Terminal Controls")
-    
+
+    # ── Phase 8 Feature 8: Einsteiger / Experten Modus ──────────────────────
+    mode_col1, mode_col2 = st.columns(2)
+    if mode_col1.button("🔰 Einsteiger" if st.session_state.expert_mode else "✅ Einsteiger",
+                        use_container_width=True,
+                        type="secondary" if st.session_state.expert_mode else "primary"):
+        st.session_state.expert_mode = False
+        st.rerun()
+    if mode_col2.button("✅ Profi" if st.session_state.expert_mode else "🧑‍💻 Profi",
+                        use_container_width=True,
+                        type="primary" if st.session_state.expert_mode else "secondary"):
+        st.session_state.expert_mode = True
+        st.rerun()
+
+    st.divider()
+
+    # ── Phase 8 Feature 5: Depot-Größe (für Risiko-Berechnung) ──────────────
+    st.session_state.depot_size = st.number_input(
+        "💰 Mein Depot (€)", min_value=100.0, max_value=10_000_000.0,
+        value=st.session_state.depot_size, step=1000.0, format="%.0f"
+    )
+    st.divider()
+
     # Asset Selection List
     PREDEFINED_ASSETS = {
         # Tech & US Blue Chips
@@ -92,9 +148,19 @@ with st.sidebar:
         if new_ticker.upper() not in st.session_state.watchlist:
             st.session_state.watchlist.append(new_ticker.upper())
             st.rerun()
+
+    # ── Phase 8 Feature 9: Watchlist Score Badges ───────────────────────────
+    _scan_res = st.session_state.get('scanner_results')
     for sym in st.session_state.watchlist:
         cols = st.columns([3, 1])
-        if cols[0].button(sym, key=f"wl_{sym}"):
+        # Score badge from last scan
+        _badge = ""
+        if _scan_res is not None:
+            _row = _scan_res[_scan_res['Symbol'] == sym]
+            if not _row.empty:
+                _sc = int(_row['Score'].iloc[0])
+                _badge = " 🟢" if _sc >= 60 else (" 🟡" if _sc >= 40 else " 🔴")
+        if cols[0].button(f"{sym}{_badge}", key=f"wl_{sym}"):
             st.session_state.tickers[0] = sym
             st.rerun()
         if cols[1].button("❌", key=f"del_{sym}"):
@@ -115,30 +181,43 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Technical Indicators")
-    with st.expander("Overlays (Main Chart)", expanded=True):
-        show_ema = st.checkbox("EMA (9,21,55)", value=True)
-        show_sma = st.checkbox("SMA (50,200)", value=False)
-        show_vwap = st.checkbox("VWAP", value=False)
-        show_ichimoku = st.checkbox("Ichimoku Cloud", value=False)
-        show_sar = st.checkbox("Parabolic SAR", value=False)
-        show_supertrend = st.checkbox("SuperTrend", value=False)
-        show_vrvp = st.checkbox("Volume Profile (VRVP)", value=False)
-        show_fib = st.checkbox("Auto Fibonacci", value=False)
-        chart_type = st.selectbox("Chart Type", ["Candlestick", "Line", "Area", "Heikin-Ashi"])
-        compare_asset = st.selectbox("Compare with Benchmark", ["None", "SPY", "QQQ", "DIA", "IWM"])
-    with st.expander("Sub-Charts", expanded=True):
-        show_volume = st.checkbox("Volume", value=True)
-        show_obv = st.checkbox("On-Balance Volume (OBV)", value=False)
-        show_rsi = st.checkbox("RSI", value=False)
-        show_macd = st.checkbox("MACD", value=False)
-        show_stoch = st.checkbox("Stochastic", value=False)
-        show_atr = st.checkbox("ATR", value=False)
-    with st.expander("⚙️ Fine-Tune Indicators", expanded=False):
-        ema1_len = st.number_input("EMA 1 Length", 1, 200, 9)
-        ema1_col = st.color_picker("EMA 1 Color", "#2196f3")
-        ema2_len = st.number_input("EMA 2 Length", 1, 200, 21)
-        ema2_col = st.color_picker("EMA 2 Color", "#ff9800")
-        rsi_len = st.number_input("RSI Length", 1, 100, 14)
+
+    # ── Phase 8 Feature 8: Show/hide indicators based on mode ───────────────
+    if st.session_state.expert_mode:
+        with st.expander("Overlays (Main Chart)", expanded=True):
+            show_ema = st.checkbox("EMA (9,21,55)", value=True)
+            show_sma = st.checkbox("SMA (50,200)", value=False)
+            show_vwap = st.checkbox("VWAP", value=False)
+            show_ichimoku = st.checkbox("Ichimoku Cloud", value=False)
+            show_sar = st.checkbox("Parabolic SAR", value=False)
+            show_supertrend = st.checkbox("SuperTrend", value=False)
+            show_vrvp = st.checkbox("Volume Profile (VRVP)", value=False)
+            show_fib = st.checkbox("Auto Fibonacci", value=False)
+            chart_type = st.selectbox("Chart Type", ["Candlestick", "Line", "Area", "Heikin-Ashi"])
+            compare_asset = st.selectbox("Compare with Benchmark", ["None", "SPY", "QQQ", "DIA", "IWM"])
+        with st.expander("Sub-Charts", expanded=True):
+            show_volume = st.checkbox("Volume", value=True)
+            show_obv = st.checkbox("On-Balance Volume (OBV)", value=False)
+            show_rsi = st.checkbox("RSI", value=False)
+            show_macd = st.checkbox("MACD", value=False)
+            show_stoch = st.checkbox("Stochastic", value=False)
+            show_atr = st.checkbox("ATR", value=False)
+        with st.expander("⚙️ Fine-Tune Indicators", expanded=False):
+            ema1_len = st.number_input("EMA 1 Length", 1, 200, 9)
+            ema1_col = st.color_picker("EMA 1 Color", "#2196f3")
+            ema2_len = st.number_input("EMA 2 Length", 1, 200, 21)
+            ema2_col = st.color_picker("EMA 2 Color", "#ff9800")
+            rsi_len = st.number_input("RSI Length", 1, 100, 14)
+    else:
+        # Einsteiger mode: sensible defaults, no clutter
+        show_ema = True; show_sma = False; show_vwap = False; show_ichimoku = False
+        show_sar = False; show_supertrend = False; show_vrvp = False; show_fib = False
+        chart_type = "Candlestick"; compare_asset = "None"
+        show_volume = True; show_obv = False; show_rsi = False
+        show_macd = False; show_stoch = False; show_atr = False
+        ema1_len = 9; ema1_col = "#2196f3"; ema2_len = 21; ema2_col = "#ff9800"; rsi_len = 14
+        st.info("🔰 Einsteiger-Modus: Indikatoren auf Minimum reduziert.\nFür mehr Optionen → **Profi** wählen.")
+
 
     st.markdown("---")
     st.markdown("### ⏱️ Real-Time Refresh")
@@ -189,11 +268,373 @@ pct_change = ((current_price - prev_price) / prev_price) * 100
 
 st.markdown(f"## {st.session_state.tickers[0]} <span style='font-size:24px; color:{'#26a69a' if pct_change>=0 else '#ef5350'}'>${current_price:,.2f} ({pct_change:+.2f}%)</span>", unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🕯️ Chart", "🏢 Fundamental", "🎲 Quants", "💼 Portfolio", "🔍 Scanner", "🎯 Strategien", "🤖 AI & ML"])
+# ── Phase 8 Feature 7: Quick Search Bar ──────────────────────────────────────
+_qs_col1, _qs_col2 = st.columns([5, 1])
+with _qs_col1:
+    _qs_val = st.text_input(
+        "🔎 Quick-Suche (Symbol eingeben + Enter)",
+        placeholder="z.B. NVDA, BTC-USD, SAP.DE...",
+        label_visibility="collapsed",
+        key="quick_search_bar"
+    )
+with _qs_col2:
+    _qs_btn = st.button("▶", use_container_width=True)
+if (_qs_val and _qs_btn) or (_qs_val and _qs_val != st.session_state.quick_search):
+    st.session_state.tickers[0] = _qs_val.upper().strip()
+    st.session_state.quick_search = _qs_val.upper().strip()
+    st.rerun()
 
-# ======= TAB 1: CHART =======
-with tab1:
-    plot_df = calc_heikin_ashi(df) if chart_type == "Heikin-Ashi" else df
+tab_home, tab_markt, tab_chart, tab_portfolio, tab_ai = st.tabs([
+    "🏠 Home", "📡 Märkte & Signale", "📈 Chart & Analyse", "💼 Portfolio", "🤖 AI & Strategien"
+])
+
+# ======= TAB HOME: DASHBOARD =======
+with tab_home:
+    st.markdown("## 🏠 Trading Dashboard")
+    st.caption("Dein persönliches Cockpit – auf einen Blick alles Wichtige für den heutigen Handelstag.")
+
+    # ── Top metrics row ──────────────────────────────────────────────────────
+    _sim_h = st.session_state.sim_state
+    _eq_h = get_current_equity(_sim_h)
+    _pnl_h = _eq_h - _sim_h.get('initial_capital', 100000)
+    _pnl_pct_h = (_pnl_h / _sim_h.get('initial_capital', 100000)) * 100
+    _n_pos_h = len(_sim_h.get('positions', []))
+    _stats_h = get_simulation_stats(_sim_h)
+    _wr_h = _stats_h.get('win_rate', 0) if _stats_h.get('total_trades', 0) > 0 else None
+
+    hm1, hm2, hm3, hm4 = st.columns(4)
+    hm1.metric(
+        "💰 Virtuelles Depot",
+        f"€{_eq_h:,.0f}",
+        delta=f"{'+' if _pnl_h >= 0 else ''}{_pnl_h:,.0f} € ({_pnl_pct_h:+.1f}%)"
+    )
+    hm2.metric("📈 Offene Positionen", str(_n_pos_h))
+    hm3.metric(
+        "🏆 Win Rate",
+        f"{_wr_h:.0f}%" if _wr_h is not None else "–",
+        delta=f"{_stats_h.get('total_trades',0)} Trades"
+    )
+    hm4.metric("🕐 Markt", market_status, delta=now.strftime("%H:%M Uhr"))
+
+    st.divider()
+
+    # ── Market Ampel + Signal preview (reused from Märkte tab) ───────────────
+    st.markdown("### 📡 Markt-Ampel (Watchlist)")
+    _wl_h = st.session_state.watchlist
+    _buy_h, _sell_h, _neutral_h = 0, 0, 0
+    _top_buys_h = []
+    _top_sells_h = []
+    _price_change_h = None
+    try:
+        _tf = yf.Ticker(st.session_state.tickers[0]).history(period="2d", interval="1d")
+        if len(_tf) >= 2:
+            _price_change_h = (_tf['Close'].iloc[-1] - _tf['Close'].iloc[-2]) / _tf['Close'].iloc[-2] * 100
+    except:
+        pass
+
+    with st.spinner("📡 Analysiere Watchlist..."):
+        for _hs in _wl_h:
+            try:
+                _r = quick_score_symbol(_hs)
+                if _r:
+                    sc, d, p, en, sl, tp, pat = _r
+                    if d == "BUY":
+                        _buy_h += 1
+                        _top_buys_h.append((_hs, sc, d, p, en, sl, tp, pat))
+                    elif d == "SELL":
+                        _sell_h += 1
+                        _top_sells_h.append((_hs, sc, d, p, en, sl, tp, pat))
+                    else:
+                        _neutral_h += 1
+            except:
+                pass
+
+    _tot_h = max(_buy_h + _sell_h + _neutral_h, 1)
+    _buy_pct_h = _buy_h / _tot_h
+    if _buy_pct_h >= 0.6:
+        _ac_h = "#00e676"; _ai_h = "🟢"; _at_h = "BULLISCH – Gute Einstiegsbedingungen"
+    elif _buy_pct_h <= 0.3:
+        _ac_h = "#ff1744"; _ai_h = "🔴"; _at_h = "SCHWACH – Abwarten oder Short-Chancen"
+    else:
+        _ac_h = "#ffea00"; _ai_h = "🟡"; _at_h = "GEMISCHT – Selektiv vorgehen"
+
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,rgba(30,30,40,0.9),rgba(20,20,30,0.95));
+                border:2px solid {_ac_h}; border-radius:16px; padding:18px 24px;
+                display:flex; align-items:center; gap:20px; margin-bottom:16px;'>
+      <span style='font-size:44px;'>{_ai_h}</span>
+      <div>
+        <div style='font-size:20px; font-weight:800; color:{_ac_h};'>{_at_h}</div>
+        <div style='font-size:12px; color:#9e9e9e; margin-top:4px;'>
+          {_buy_h} Kaufsignale &nbsp;|&nbsp; {_sell_h} Verkaufssignale &nbsp;|&nbsp; {_neutral_h} Neutral
+          &nbsp;|&nbsp; {len(_wl_h)} Watchlist-Assets
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Top signals inline (3-column) ────────────────────────────────────────
+    _top3_buys_h = sorted(_top_buys_h, key=lambda x: x[1], reverse=True)[:3]
+    _top3_sells_h = sorted(_top_sells_h, key=lambda x: x[1])[:3]
+
+    _home_sig_cols = st.columns(3)
+    _sig_items = _top3_buys_h + _top3_sells_h
+    for _ci, _hs_item in enumerate((_sig_items)[:3]):
+        _hs_sym, _hs_sc, _hs_dir, _hs_p, _hs_en, _hs_sl, _hs_tp, _hs_pat = _hs_item
+        _is_buy = _hs_dir == "BUY"
+        _hcol = "#00e676" if _is_buy else "#ff1744"
+        _hrr = abs(_hs_tp - _hs_en) / abs(_hs_en - _hs_sl) if abs(_hs_en - _hs_sl) > 0 else 0
+        with _home_sig_cols[_ci]:
+            st.markdown(f"""
+            <div style='border-left:4px solid {_hcol}; background:rgba(255,255,255,0.03);
+                        padding:12px 16px; border-radius:10px;'>
+              <div style='font-size:18px; font-weight:800; color:{_hcol};'>
+                {'🟢' if _is_buy else '🔴'} {_hs_sym}
+                <span style='font-size:11px; color:#9e9e9e; font-weight:400;'>&nbsp;Score: {_hs_sc}</span>
+              </div>
+              <div style='font-size:13px; margin:6px 0; color:#ccc;'>
+                💲 ${_hs_p:,.2f} &nbsp; 📍 Entry ${_hs_en:,.2f}<br/>
+                🛑 SL ${_hs_sl:,.2f} &nbsp; 🎯 TP ${_hs_tp:,.2f}
+              </div>
+              <div style='font-size:11px; color:#777;'>R:R 1:{_hrr:.1f} &nbsp;|&nbsp; {_hs_pat}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button(f"📈 {_hs_sym} Chart", key=f"home_chart_{_hs_sym}", use_container_width=True):
+                st.session_state.tickers[0] = _hs_sym
+                st.rerun()
+
+    st.divider()
+
+    # ── Quick actions ─────────────────────────────────────────────────────────
+    st.markdown("### ⚡ Quick Actions")
+    _qa1, _qa2, _qa3, _qa4 = st.columns(4)
+    with _qa1:
+        st.markdown("""
+        <a href="?" style='display:block; text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#1a237e,#283593); color:white; text-decoration:none;
+            font-weight:700; font-size:15px;'>📡 Märkte scannen</a>
+        """, unsafe_allow_html=True)
+    with _qa2:
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#004d40,#00695c); color:white;
+            font-weight:700; font-size:15px;'>📈 Chart öffnen</div>
+        """, unsafe_allow_html=True)
+    with _qa3:
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#4a148c,#6a1b9a); color:white;
+            font-weight:700; font-size:15px;'>💼 Portfolio ansehen</div>
+        """, unsafe_allow_html=True)
+    with _qa4:
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#b71c1c,#c62828); color:white;
+            font-weight:700; font-size:15px;'>🤖 AI Analyse starten</div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── Latest news for current asset ────────────────────────────────────────
+    st.markdown(f"### 📰 Aktuelle News – {st.session_state.tickers[0]}")
+    try:
+        _hn_ticker = yf.Ticker(st.session_state.tickers[0])
+        _hn_news = _hn_ticker.news or []
+        if _hn_news:
+            for _hn in _hn_news[:4]:
+                _hn_title = _hn.get('title', 'No title')
+                _hn_pub = datetime.datetime.fromtimestamp(_hn.get('providerPublishTime', 0)).strftime("%d.%m. %H:%M")
+                _hn_src = _hn.get('publisher', '')
+                _hn_url = _hn.get('link', '#')
+                st.markdown(f"""<div style='padding:8px 0; border-bottom:1px solid #1e1e2e;'>
+                  <a href='{_hn_url}' target='_blank' style='color:#90caf9; text-decoration:none; font-size:14px; font-weight:600;'>{_hn_title}</a>
+                  <span style='color:#666; font-size:11px; margin-left:10px;'>{_hn_src} · {_hn_pub}</span>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.info("Keine aktuellen Nachrichten verfügbar.")
+    except:
+        st.info("News konnten nicht geladen werden.")
+
+# ======= MÄRKTE: SIGNAL DASHBOARD =======
+with tab_markt:
+    st.markdown("## 🚀 Heutige Handelssignale")
+    st.caption("Live-Signale deiner Watchlist – berechnet aus RSI, EMA, MACD, ADX und Support/Resistance.")
+
+    # ── Quick scoring function ──────────────────────────────────────────────
+    @st.cache_data(ttl=300)
+    def quick_score_symbol(sym: str):
+        """Returns (score, direction, price, entry, sl, tp, pattern) or None."""
+        try:
+            _t = yf.Ticker(sym)
+            _df = _t.history(period="3mo", interval="1d")
+            if _df is None or len(_df) < 30:
+                return None
+            _df = apply_core_indicators(_df, 9, 21, 14)
+            p = _df['Close'].iloc[-1]
+            atr = _df['ATR'].iloc[-1] if 'ATR' in _df.columns and not pd.isna(_df['ATR'].iloc[-1]) else p * 0.02
+            rsi = _df['RSI'].iloc[-1] if 'RSI' in _df.columns and not pd.isna(_df['RSI'].iloc[-1]) else 50
+            ema1 = _df['EMA_1'].iloc[-1] if 'EMA_1' in _df.columns else p
+            ema2 = _df['EMA_2'].iloc[-1] if 'EMA_2' in _df.columns else p
+            ema55 = _df['EMA_55'].iloc[-1] if 'EMA_55' in _df.columns else p
+            macd_h = _df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in _df.columns and not pd.isna(_df['MACD_Hist'].iloc[-1]) else 0
+            adx = _df['ADX'].iloc[-1] if 'ADX' in _df.columns and not pd.isna(_df['ADX'].iloc[-1]) else 20
+            plus_di = _df['Plus_DI'].iloc[-1] if 'Plus_DI' in _df.columns and not pd.isna(_df['Plus_DI'].iloc[-1]) else 50
+            minus_di = _df['Minus_DI'].iloc[-1] if 'Minus_DI' in _df.columns and not pd.isna(_df['Minus_DI'].iloc[-1]) else 50
+            sc = 0
+            if ema1 > ema2 > ema55: sc += 3
+            elif ema1 < ema2 < ema55: sc -= 3
+            if p > ema1: sc += 1
+            elif p < ema1: sc -= 1
+            if rsi < 35: sc += 2
+            elif rsi > 65: sc -= 2
+            if macd_h > 0: sc += 2
+            elif macd_h < 0: sc -= 2
+            if adx > 25 and plus_di > minus_di: sc += 2
+            elif adx > 25 and minus_di > plus_di: sc -= 2
+            # candle patterns
+            hammer = _df['Hammer'].iloc[-1] if 'Hammer' in _df.columns else False
+            engulf = _df['Bullish_Engulfing'].iloc[-1] if 'Bullish_Engulfing' in _df.columns else False
+            shoot = _df['Shooting_Star'].iloc[-1] if 'Shooting_Star' in _df.columns else False
+            pattern = "🔨 Hammer" if hammer else ("🟢 Engulfing" if engulf else ("⭐ Shooting Star" if shoot else ""))
+            if hammer or engulf: sc += 1
+            if shoot: sc -= 1
+            direction = "BUY" if sc >= 3 else ("SELL" if sc <= -3 else "NEUTRAL")
+            # entry/sl/tp
+            if direction == "BUY":
+                entry = p; sl = p - atr * 1.5; tp = p + atr * 2.5
+            elif direction == "SELL":
+                entry = p; sl = p + atr * 1.5; tp = p - atr * 2.5
+            else:
+                entry = p; sl = p - atr * 1.5; tp = p + atr * 2.0
+            return (sc, direction, p, entry, sl, tp, pattern)
+        except:
+            return None
+
+    # ── Compute signals for entire watchlist ────────────────────────────────
+    _watchlist_signals = []
+    _n_syms = len(st.session_state.watchlist)
+    if _n_syms > 0:
+        _prog = st.progress(0, text="📡 Analysiere Watchlist...")
+        for _wi, _wsym in enumerate(st.session_state.watchlist):
+            _prog.progress((_wi + 1) / _n_syms, text=f"📡 {_wsym}...")
+            _res = quick_score_symbol(_wsym)
+            if _res:
+                _watchlist_signals.append((_wsym, *_res))
+        _prog.empty()
+
+    # ── Market Ampel ────────────────────────────────────────────────────────
+    _buy_sigs = [s for s in _watchlist_signals if s[2] == "BUY"]
+    _sell_sigs = [s for s in _watchlist_signals if s[2] == "SELL"]
+    _total = len(_watchlist_signals) or 1
+    _buy_pct = len(_buy_sigs) / _total
+    if _buy_pct >= 0.6:
+        _ampel_color = "#00e676"; _ampel_icon = "🟢"; _ampel_text = "KAUFEN – Markt bullisch"
+    elif _buy_pct <= 0.3:
+        _ampel_color = "#ff1744"; _ampel_icon = "🔴"; _ampel_text = "VORSICHT – Markt schwach"
+    else:
+        _ampel_color = "#ffea00"; _ampel_icon = "🟡"; _ampel_text = "ABWARTEN – Gemischte Signale"
+
+    st.markdown(f"""
+    <div style='background:linear-gradient(135deg,rgba(30,30,40,0.9),rgba(20,20,30,0.95));
+                border:2px solid {_ampel_color}; border-radius:16px; padding:20px 28px;
+                margin-bottom:20px; display:flex; align-items:center; gap:20px;'>
+      <span style='font-size:48px;'>{_ampel_icon}</span>
+      <div>
+        <div style='font-size:22px; font-weight:800; color:{_ampel_color};'>{_ampel_text}</div>
+        <div style='font-size:13px; color:#9e9e9e; margin-top:4px;'>
+          {len(_buy_sigs)} Kaufsignal{'e' if len(_buy_sigs)!=1 else ''} &nbsp;|&nbsp;
+          {len(_sell_sigs)} Verkaufssignal{'e' if len(_sell_sigs)!=1 else ''} &nbsp;|&nbsp;
+          {len(_watchlist_signals)} Assets analysiert
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Top 3 BUY + Top 3 SELL signal cards ────────────────────────────────
+    _sig_cols = st.columns(2)
+    with _sig_cols[0]:
+        st.markdown("### 🟢 Top Kaufsignale")
+        _buy_sorted = sorted(_buy_sigs, key=lambda x: x[1], reverse=True)[:3]
+        if not _buy_sorted:
+            st.info("Keine klaren Kaufsignale in der Watchlist.")
+        for _bs in _buy_sorted:
+            _bsym, _bsc, _bdir, _bprice, _bentry, _bsl, _btp, _bpat = _bs
+            _depot = st.session_state.depot_size
+            _risk_eur = _depot * 0.02
+            _risk_per_share = abs(_bentry - _bsl)
+            _shares = int(_risk_eur / _risk_per_share) if _risk_per_share > 0 else 0
+            _rr = abs(_btp - _bentry) / _risk_per_share if _risk_per_share > 0 else 0
+            st.markdown(f"""
+            <div style='border-left:4px solid #00e676; background:rgba(0,230,118,0.06);
+                        padding:16px 20px; border-radius:10px; margin:8px 0;'>
+              <div style='font-size:20px; font-weight:800;'>{_bsym}
+                <span style='font-size:13px; color:#9e9e9e; font-weight:400; margin-left:8px;'>Score: {_bsc}</span>
+                <span style='font-size:12px; color:#26a69a; margin-left:8px;'>{_bpat}</span>
+              </div>
+              <div style='font-size:15px; margin:6px 0;'>
+                <b style='color:#00e676;'>Kurs: ${_bprice:,.2f}</b><br/>
+                📍 Entry: <b>${_bentry:,.2f}</b> &nbsp;
+                🛑 SL: <b style='color:#ff5252;'>${_bsl:,.2f}</b> &nbsp;
+                🎯 TP: <b style='color:#00e676;'>${_btp:,.2f}</b>
+              </div>
+              <div style='font-size:12px; color:#9e9e9e;'>
+                Risiko: €{_risk_eur:.0f} (2%) → {_shares} Anteile &nbsp;|&nbsp; R:R 1:{_rr:.1f}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            _bc1, _bc2 = st.columns(2)
+            if _bc1.button(f"📊 {_bsym} Chart", key=f"sig_load_{_bsym}"):
+                st.session_state.tickers[0] = _bsym; st.rerun()
+            _order_str = f"BUY {_shares}x {_bsym} @ ${_bentry:.2f} | SL ${_bsl:.2f} | TP ${_btp:.2f}"
+            _bc2.code(_order_str, language=None)
+
+    with _sig_cols[1]:
+        st.markdown("### 🔴 Top Vorsicht-Signale")
+        _sell_sorted = sorted(_sell_sigs, key=lambda x: x[1])[:3]
+        if not _sell_sorted:
+            st.info("Keine klaren Verkaufssignale in der Watchlist.")
+        for _ss in _sell_sorted:
+            _ssym, _ssc, _sdir, _sprice, _sentry, _ssl, _stp, _spat = _ss
+            _depot = st.session_state.depot_size
+            _risk_eur = _depot * 0.02
+            _risk_per_share = abs(_sentry - _ssl)
+            _shares_s = int(_risk_eur / _risk_per_share) if _risk_per_share > 0 else 0
+            _rr_s = abs(_stp - _sentry) / _risk_per_share if _risk_per_share > 0 else 0
+            st.markdown(f"""
+            <div style='border-left:4px solid #ff1744; background:rgba(255,23,68,0.06);
+                        padding:16px 20px; border-radius:10px; margin:8px 0;'>
+              <div style='font-size:20px; font-weight:800;'>{_ssym}
+                <span style='font-size:13px; color:#9e9e9e; font-weight:400; margin-left:8px;'>Score: {_ssc}</span>
+                <span style='font-size:12px; color:#ff5252; margin-left:8px;'>{_spat}</span>
+              </div>
+              <div style='font-size:15px; margin:6px 0;'>
+                <b style='color:#ff5252;'>Kurs: ${_sprice:,.2f}</b><br/>
+                📍 Entry: <b>${_sentry:,.2f}</b> &nbsp;
+                🛑 SL: <b style='color:#ff5252;'>${_ssl:,.2f}</b> &nbsp;
+                🎯 TP: <b style='color:#26a69a;'>${_stp:,.2f}</b>
+              </div>
+              <div style='font-size:12px; color:#9e9e9e;'>
+                Risiko: €{_risk_eur:.0f} (2%) → {_shares_s} Anteile &nbsp;|&nbsp; R:R 1:{_rr_s:.1f}
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+            if st.button(f"📊 {_ssym} laden", key=f"sig_load_s_{_ssym}"):
+                st.session_state.tickers[0] = _ssym; st.rerun()
+
+    # ── Morning scan status ────────────────────────────────────────────────
+    if st.session_state.morning_scan_date == now.strftime("%Y-%m-%d"):
+        st.success(f"✅ Morgenscan abgeschlossen ({now.strftime('%H:%M')} Uhr)")
+
+
+
+# ======= CHART & ANALYSE =======
+with tab_chart:
+    # Inner subtabs: [Chart] [Fundamental] [Risiko & Quants]
+    ch_tab_chart, ch_tab_fund, ch_tab_quants = st.tabs([
+        "📈 Chart & Indikatoren", "🏢 Fundamental & News", "🧮 Risiko & Quants"
+    ])
+    with ch_tab_chart:
+        plot_df = calc_heikin_ashi(df) if chart_type == "Heikin-Ashi" else df
 
     # Dynamic subplot building
     subplots = []
@@ -378,6 +819,58 @@ with tab1:
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
     st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True,
         'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawcircle', 'drawrect', 'eraseshape']})
+
+    # ══════════════════════════════════════════════════════════════
+    # 🎯 Always-On Recommendation Banner (Feature 3)
+    # ══════════════════════════════════════════════════════════════
+    try:
+        _banner_rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
+        _banner_ema1 = df['EMA_1'].iloc[-1] if 'EMA_1' in df.columns else current_price
+        _banner_ema2 = df['EMA_2'].iloc[-1] if 'EMA_2' in df.columns else current_price
+        _banner_ema55 = df['EMA_55'].iloc[-1] if 'EMA_55' in df.columns else current_price
+        _banner_macd_h = df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in df.columns and not pd.isna(df['MACD_Hist'].iloc[-1]) else 0
+        _banner_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns and not pd.isna(df['ATR'].iloc[-1]) else current_price * 0.02
+        _banner_sc = 0
+        if _banner_ema1 > _banner_ema2 > _banner_ema55: _banner_sc += 3
+        elif _banner_ema1 < _banner_ema2 < _banner_ema55: _banner_sc -= 3
+        if current_price > _banner_ema1: _banner_sc += 1
+        elif current_price < _banner_ema1: _banner_sc -= 1
+        if _banner_rsi < 35: _banner_sc += 2
+        elif _banner_rsi > 65: _banner_sc -= 2
+        if _banner_macd_h > 0: _banner_sc += 2
+        elif _banner_macd_h < 0: _banner_sc -= 2
+        _banner_entry = current_price
+        _banner_sl = current_price - _banner_atr * 1.5 if _banner_sc >= 3 else current_price + _banner_atr * 1.5
+        _banner_tp = current_price + _banner_atr * 2.5 if _banner_sc >= 3 else current_price - _banner_atr * 2.5
+        # Depot-based risk
+        _d = st.session_state.depot_size
+        _risk2 = _d * 0.02
+        _r_per_share = abs(_banner_entry - _banner_sl)
+        _pos_shares = int(_risk2 / _r_per_share) if _r_per_share > 0 else 0
+        _rr_banner = abs(_banner_tp - _banner_entry) / _r_per_share if _r_per_share > 0 else 0
+        if _banner_sc >= 3:
+            _bc_color = '#00e676'; _b_icon = '🟢'; _b_action = 'KAUFEN'
+            _b_msg = f'KAUFE bei ${_banner_entry:,.2f} • SL ${_banner_sl:,.2f} • TP ${_banner_tp:,.2f} • {_pos_shares} Anteile • Risiko €{_risk2:.0f}'
+        elif _banner_sc <= -3:
+            _bc_color = '#ff1744'; _b_icon = '🔴'; _b_action = 'NICHT KAUFEN'
+            _b_msg = f'Abwärtstrend • SL ${_banner_sl:,.2f} • Ziel ${_banner_tp:,.2f} • Risiko €{_risk2:.0f}'
+        else:
+            _bc_color = '#ffea00'; _b_icon = '🟡'; _b_action = 'ABWARTEN'
+            _b_msg = f'Kein klares Signal. Warte auf Score ≥3. RSI: {_banner_rsi:.0f}'
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg, rgba(30,30,40,0.85), rgba(20,20,30,0.9));
+                    border:2px solid {_bc_color}; border-radius:12px;
+                    padding:14px 22px; margin:12px 0; display:flex; align-items:center; gap:14px;'>
+          <span style='font-size:36px;'>{_b_icon}</span>
+          <div style='flex:1;'>
+            <div style='font-size:18px; font-weight:800; color:{_bc_color};'>Signal: {_b_action}</div>
+            <div style='font-size:13px; color:#ddd; margin-top:3px;'>{_b_msg}</div>
+          </div>
+          <div style='text-align:right; font-size:12px; color:#9e9e9e;'>Score {_banner_sc} &nbsp;|&nbsp; R:R 1:{_rr_banner:.1f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    except:
+        pass
 
     # ══════════════════════════════════════════════════════════════
     # 🎯 Smart Entry Zone Scanner v2
@@ -623,201 +1116,201 @@ with tab1:
         st.caption("⚠️ Dies ist keine Anlageberatung. Immer eigene Analyse durchführen!")
 
 
-# ======= TAB 2: FUNDAMENTALS & NEWS =======
-with tab2:
-    f1, f2, f3 = st.columns([1, 1, 1])
-    ticker_obj = yf.Ticker(st.session_state.tickers[0])
-    if info:
-        with f1:
-            st.markdown(f"### 🏢 {info.get('shortName', st.session_state.tickers[0])}")
-            st.write(f"**Sector:** {info.get('sector', 'N/A')}")
-            st.write(f"**Industry:** {info.get('industry', 'N/A')}")
-            emp = info.get('fullTimeEmployees')
-            st.write(f"**Employees:** {emp:,}" if isinstance(emp, (int, float)) and emp else "**Employees:** N/A")
-            beta = info.get('beta', 'N/A')
-            st.metric("Beta (vs S&P500)", f"{beta:.2f}" if isinstance(beta, (int, float)) else "N/A")
-            with st.expander("Summary"):
-                st.write(info.get('longBusinessSummary', 'No description available.'))
-        with f2:
-            st.markdown("### 📊 Metrics")
-            mcap = info.get('marketCap', 0)
-            if mcap > 1e12: mcap_str = f"${mcap/1e12:.2f}T"
-            elif mcap > 1e9: mcap_str = f"${mcap/1e9:.2f}B"
-            else: mcap_str = f"${mcap/1e6:.2f}M"
-            st.metric("Market Cap", mcap_str)
-            st.metric("Trailing P/E", f"{info.get('trailingPE', 'N/A')}")
-            st.metric("Forward P/E", f"{info.get('forwardPE', 'N/A')}")
-            # trailingAnnualDividendYield is in decimal form (0.004 = 0.4%)
-            # dividendYield in newer yfinance returns % directly (0.38 = 0.38%)
-            _dy_trail = info.get('trailingAnnualDividendYield')
-            _dy_raw   = info.get('dividendYield')
-            if _dy_trail and _dy_trail > 0:
-                dy_str = f"{_dy_trail * 100:.2f}%"
-            elif _dy_raw and _dy_raw > 0:
-                dy_str = f"{_dy_raw:.2f}%"  # already in % form
-            else:
-                dy_str = "N/A"
-            st.metric("Dividend Yield", dy_str)
-            short_ratio = info.get('shortRatio', None)
-            if short_ratio: st.metric("Short Interest Ratio", f"{short_ratio:.2f}")
-        with f3:
-            st.markdown("### 📰 Latest News")
-            if news:
-                for idx, n in enumerate(news[:5]):
-                    # New yfinance schema: news[i] = {"id": ..., "content": {...}}
-                    content = n.get('content') or {}
-                    title = (
-                        content.get('title') or
-                        n.get('title') or
-                        content.get('summary', '')[:80] or
-                        'Artikel lesen'
-                    )
-                    url = (
-                        (content.get('canonicalUrl') or {}).get('url') or
-                        (content.get('clickThroughUrl') or {}).get('url') or
-                        n.get('link') or n.get('url') or '#'
-                    )
-                    publisher = (
-                        (content.get('provider') or {}).get('displayName') or
-                        n.get('publisher') or
-                        (content.get('pubDate') or '')[:10] or
-                        'Yahoo Finance'
-                    )
-                    pub_date = (content.get('pubDate') or '')[:10]
-                    st.markdown(f"**[{title}]({url})**")
-                    st.caption(f"{publisher}" + (f" · {pub_date}" if pub_date else ""))
-                    if idx < 4: st.divider()
-            else: st.write("No news available.")
-    else: st.warning("Fundamental data not available.")
+    # ======= CHART: FUNDAMENTAL SUBTAB =======
+    with ch_tab_fund:
+            f1, f2, f3 = st.columns([1, 1, 1])
+            ticker_obj = yf.Ticker(st.session_state.tickers[0])
+            if info:
+                with f1:
+                    st.markdown(f"### 🏢 {info.get('shortName', st.session_state.tickers[0])}")
+                    st.write(f"**Sector:** {info.get('sector', 'N/A')}")
+                    st.write(f"**Industry:** {info.get('industry', 'N/A')}")
+                    emp = info.get('fullTimeEmployees')
+                    st.write(f"**Employees:** {emp:,}" if isinstance(emp, (int, float)) and emp else "**Employees:** N/A")
+                    beta = info.get('beta', 'N/A')
+                    st.metric("Beta (vs S&P500)", f"{beta:.2f}" if isinstance(beta, (int, float)) else "N/A")
+                    with st.expander("Summary"):
+                        st.write(info.get('longBusinessSummary', 'No description available.'))
+                with f2:
+                    st.markdown("### 📊 Metrics")
+                    mcap = info.get('marketCap', 0)
+                    if mcap > 1e12: mcap_str = f"${mcap/1e12:.2f}T"
+                    elif mcap > 1e9: mcap_str = f"${mcap/1e9:.2f}B"
+                    else: mcap_str = f"${mcap/1e6:.2f}M"
+                    st.metric("Market Cap", mcap_str)
+                    st.metric("Trailing P/E", f"{info.get('trailingPE', 'N/A')}")
+                    st.metric("Forward P/E", f"{info.get('forwardPE', 'N/A')}")
+                    # trailingAnnualDividendYield is in decimal form (0.004 = 0.4%)
+                    # dividendYield in newer yfinance returns % directly (0.38 = 0.38%)
+                    _dy_trail = info.get('trailingAnnualDividendYield')
+                    _dy_raw   = info.get('dividendYield')
+                    if _dy_trail and _dy_trail > 0:
+                        dy_str = f"{_dy_trail * 100:.2f}%"
+                    elif _dy_raw and _dy_raw > 0:
+                        dy_str = f"{_dy_raw:.2f}%"  # already in % form
+                    else:
+                        dy_str = "N/A"
+                    st.metric("Dividend Yield", dy_str)
+                    short_ratio = info.get('shortRatio', None)
+                    if short_ratio: st.metric("Short Interest Ratio", f"{short_ratio:.2f}")
+                with f3:
+                    st.markdown("### 📰 Latest News")
+                    if news:
+                        for idx, n in enumerate(news[:5]):
+                            # New yfinance schema: news[i] = {"id": ..., "content": {...}}
+                            content = n.get('content') or {}
+                            title = (
+                                content.get('title') or
+                                n.get('title') or
+                                content.get('summary', '')[:80] or
+                                'Artikel lesen'
+                            )
+                            url = (
+                                (content.get('canonicalUrl') or {}).get('url') or
+                                (content.get('clickThroughUrl') or {}).get('url') or
+                                n.get('link') or n.get('url') or '#'
+                            )
+                            publisher = (
+                                (content.get('provider') or {}).get('displayName') or
+                                n.get('publisher') or
+                                (content.get('pubDate') or '')[:10] or
+                                'Yahoo Finance'
+                            )
+                            pub_date = (content.get('pubDate') or '')[:10]
+                            st.markdown(f"**[{title}]({url})**")
+                            st.caption(f"{publisher}" + (f" · {pub_date}" if pub_date else ""))
+                            if idx < 4: st.divider()
+                    else: st.write("No news available.")
+            else: st.warning("Fundamental data not available.")
 
-    st.divider()
-    st.markdown("### 📊 Analyst Recommendations")
-    try:
-        recs = ticker_obj.recommendations
-        if recs is not None and not recs.empty:
-            recent_recs = recs.tail(12)
-            fig_rec = go.Figure()
-            for col in recent_recs.columns:
-                if col != 'period':
-                    fig_rec.add_trace(go.Bar(name=col, x=recent_recs.index.astype(str), y=recent_recs[col]))
-            fig_rec.update_layout(barmode='stack', height=200, margin=dict(l=0,r=0,t=0,b=0), template='plotly_dark', paper_bgcolor='#0e1117')
-            st.plotly_chart(fig_rec, use_container_width=True)
-        else: st.write("No analyst recommendations available.")
-    except: st.write("Analyst data not available.")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("### 📑 Financial Statements")
-        fin_choice = st.radio("Statement", ["Income Statement", "Balance Sheet"], horizontal=True, key="fin_stmt")
-        try:
-            stmt = ticker_obj.income_stmt if fin_choice == "Income Statement" else ticker_obj.balance_sheet
-            if stmt is not None and not stmt.empty:
-                stmt.columns = [c.strftime('%Y') if hasattr(c, 'strftime') else str(c) for c in stmt.columns]
-                st.dataframe(stmt.head(15), use_container_width=True)
-            else: st.write("Not available.")
-        except: st.write("Financial data not available.")
-        st.markdown("### 🕵️ Insider Trading")
-        try:
-            insiders = ticker_obj.insider_transactions
-            if insiders is not None and not insiders.empty:
-                st.dataframe(insiders.head(10), use_container_width=True, hide_index=True)
-            else: st.write("No insider transaction data.")
-        except: st.write("Insider data not available.")
-    with col_b:
-        st.markdown("### 🏆 Peer Comparison")
-        peers = ["AAPL", "MSFT", "GOOG", "AMZN", "META"]
-        peer_data = []
-        for p_tick in peers[:5]:
+            st.divider()
+            st.markdown("### 📊 Analyst Recommendations")
             try:
-                p_info = yf.Ticker(p_tick).info
-                peer_data.append({"Symbol": p_tick, "P/E": p_info.get('trailingPE', '-'), "MarketCap": f"${p_info.get('marketCap',0)/1e9:.0f}B", "Beta": p_info.get('beta', '-')})
-            except: peer_data.append({"Symbol": p_tick, "P/E": "-", "MarketCap": "-", "Beta": "-"})
-        st.dataframe(pd.DataFrame(peer_data), use_container_width=True, hide_index=True)
+                recs = ticker_obj.recommendations
+                if recs is not None and not recs.empty:
+                    recent_recs = recs.tail(12)
+                    fig_rec = go.Figure()
+                    for col in recent_recs.columns:
+                        if col != 'period':
+                            fig_rec.add_trace(go.Bar(name=col, x=recent_recs.index.astype(str), y=recent_recs[col]))
+                    fig_rec.update_layout(barmode='stack', height=200, margin=dict(l=0,r=0,t=0,b=0), template='plotly_dark', paper_bgcolor='#0e1117')
+                    st.plotly_chart(fig_rec, use_container_width=True)
+                else: st.write("No analyst recommendations available.")
+            except: st.write("Analyst data not available.")
 
-        st.markdown("### 😱 Fear & Greed Index")
-        ann_vol_fg = df['Daily_Return'].std() * np.sqrt(252) * 100
-        fear_val = max(0, min(100, 100 - ann_vol_fg * 2))
-        fig_fg = go.Figure(go.Indicator(mode="gauge+number", value=fear_val,
-            gauge={'axis': {'range': [0, 100]}, 'bar': {'color': '#00e676' if fear_val > 60 else '#ff9800' if fear_val > 30 else '#ff1744'},
-                   'steps': [{'range': [0,25], 'color': 'rgba(255,0,0,0.15)'}, {'range': [25,50], 'color': 'rgba(255,150,0,0.1)'},
-                             {'range': [50,75], 'color': 'rgba(255,255,0,0.1)'}, {'range': [75,100], 'color': 'rgba(0,255,0,0.1)'}]}))
-        fig_fg.update_layout(height=180, margin=dict(l=20,r=20,t=10,b=0), paper_bgcolor='#0e1117')
-        st.plotly_chart(fig_fg, use_container_width=True)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("### 📑 Financial Statements")
+                fin_choice = st.radio("Statement", ["Income Statement", "Balance Sheet"], horizontal=True, key="fin_stmt")
+                try:
+                    stmt = ticker_obj.income_stmt if fin_choice == "Income Statement" else ticker_obj.balance_sheet
+                    if stmt is not None and not stmt.empty:
+                        stmt.columns = [c.strftime('%Y') if hasattr(c, 'strftime') else str(c) for c in stmt.columns]
+                        st.dataframe(stmt.head(15), use_container_width=True)
+                    else: st.write("Not available.")
+                except: st.write("Financial data not available.")
+                st.markdown("### 🕵️ Insider Trading")
+                try:
+                    insiders = ticker_obj.insider_transactions
+                    if insiders is not None and not insiders.empty:
+                        st.dataframe(insiders.head(10), use_container_width=True, hide_index=True)
+                    else: st.write("No insider transaction data.")
+                except: st.write("Insider data not available.")
+            with col_b:
+                st.markdown("### 🏆 Peer Comparison")
+                peers = ["AAPL", "MSFT", "GOOG", "AMZN", "META"]
+                peer_data = []
+                for p_tick in peers[:5]:
+                    try:
+                        p_info = yf.Ticker(p_tick).info
+                        peer_data.append({"Symbol": p_tick, "P/E": p_info.get('trailingPE', '-'), "MarketCap": f"${p_info.get('marketCap',0)/1e9:.0f}B", "Beta": p_info.get('beta', '-')})
+                    except: peer_data.append({"Symbol": p_tick, "P/E": "-", "MarketCap": "-", "Beta": "-"})
+                st.dataframe(pd.DataFrame(peer_data), use_container_width=True, hide_index=True)
 
-        with st.expander("🌿 ESG Scores"):
-            st.write("**Environmental:** 72/100 | **Social:** 65/100 | **Governance:** 80/100")
-            st.progress(0.72, text="Environment"); st.progress(0.65, text="Social"); st.progress(0.80, text="Governance")
-        with st.expander("📈 Option Chain Analysis"):
-            st.dataframe({"Strike": [current_price*0.95, current_price, current_price*1.05], "Call OI": [12500, 45000, 8700], "Put OI": [8200, 22000, 15600]}, hide_index=True)
-        with st.expander("📱 Social Sentiment Tracker"):
-            fig_radar = go.Figure(go.Scatterpolar(r=[75,60,85,45,70], theta=['Reddit','Twitter/X','YouTube','Discord','StockTwits'], fill='toself', fillcolor='rgba(38,166,154,0.3)', line_color='#26a69a'))
-            fig_radar.update_layout(polar=dict(bgcolor='#0e1117', radialaxis=dict(range=[0,100])), height=200, margin=dict(l=30,r=30,t=10,b=10), paper_bgcolor='#0e1117')
-            st.plotly_chart(fig_radar, use_container_width=True)
+                st.markdown("### 😱 Fear & Greed Index")
+                ann_vol_fg = df['Daily_Return'].std() * np.sqrt(252) * 100
+                fear_val = max(0, min(100, 100 - ann_vol_fg * 2))
+                fig_fg = go.Figure(go.Indicator(mode="gauge+number", value=fear_val,
+                    gauge={'axis': {'range': [0, 100]}, 'bar': {'color': '#00e676' if fear_val > 60 else '#ff9800' if fear_val > 30 else '#ff1744'},
+                           'steps': [{'range': [0,25], 'color': 'rgba(255,0,0,0.15)'}, {'range': [25,50], 'color': 'rgba(255,150,0,0.1)'},
+                                     {'range': [50,75], 'color': 'rgba(255,255,0,0.1)'}, {'range': [75,100], 'color': 'rgba(0,255,0,0.1)'}]}))
+                fig_fg.update_layout(height=180, margin=dict(l=20,r=20,t=10,b=0), paper_bgcolor='#0e1117')
+                st.plotly_chart(fig_fg, use_container_width=True)
 
-# ======= TAB 3: RISK & QUANTS =======
-with tab3:
-    st.markdown("### 🧮 Advanced Quantitative Risk Analysis")
-    returns = df['Daily_Return'].dropna()
-    mean_ret = returns.mean()
-    std_dev = returns.std()
-    c1, c2, c3, c4 = st.columns(4)
-    var_95 = np.percentile(returns, 5)
-    cvar_95 = returns[returns <= var_95].mean()
-    c1.metric("Value at Risk (95%)", f"{var_95*100:.2f}%")
-    c2.metric("CVaR (Expected Shortfall)", f"{cvar_95*100:.2f}%")
-    rf = 0.02 / 252
-    downside = returns[returns < 0]
-    sortino = (mean_ret - rf) / downside.std() if len(downside) > 0 else 0
-    sharpe = (mean_ret - rf) / std_dev if std_dev > 0 else 0
-    running_max = df['Close'].cummax()
-    drawdown = (df['Close'] - running_max) / running_max
-    max_dd = drawdown.min()
-    calmar = (mean_ret * 252) / abs(max_dd) if max_dd != 0 else 0
-    win_prob = len(returns[returns > 0]) / len(returns)
-    avg_win = returns[returns > 0].mean()
-    avg_loss = abs(returns[returns < 0].mean())
-    wl_ratio = avg_win / avg_loss if avg_loss != 0 else 1
-    kelly = win_prob - ((1 - win_prob) / wl_ratio) if wl_ratio > 0 else 0
-    c3.metric("Sortino Ratio", f"{sortino * np.sqrt(252):.2f}")
-    c4.metric("Calmar Ratio", f"{calmar:.2f}")
+                with st.expander("🌿 ESG Scores"):
+                    st.write("**Environmental:** 72/100 | **Social:** 65/100 | **Governance:** 80/100")
+                    st.progress(0.72, text="Environment"); st.progress(0.65, text="Social"); st.progress(0.80, text="Governance")
+                with st.expander("📈 Option Chain Analysis"):
+                    st.dataframe({"Strike": [current_price*0.95, current_price, current_price*1.05], "Call OI": [12500, 45000, 8700], "Put OI": [8200, 22000, 15600]}, hide_index=True)
+                with st.expander("📱 Social Sentiment Tracker"):
+                    fig_radar = go.Figure(go.Scatterpolar(r=[75,60,85,45,70], theta=['Reddit','Twitter/X','YouTube','Discord','StockTwits'], fill='toself', fillcolor='rgba(38,166,154,0.3)', line_color='#26a69a'))
+                    fig_radar.update_layout(polar=dict(bgcolor='#0e1117', radialaxis=dict(range=[0,100])), height=200, margin=dict(l=30,r=30,t=10,b=10), paper_bgcolor='#0e1117')
+                    st.plotly_chart(fig_radar, use_container_width=True)
 
-    st.divider()
-    r1c, r2c = st.columns([2, 1])
-    with r1c:
-        st.markdown("**Max Drawdown (Underwater Chart)**")
-        fig_dd = go.Figure()
-        fig_dd.add_trace(go.Scatter(x=drawdown.index, y=drawdown*100, fill='tozeroy', mode='none', fillcolor='rgba(239,83,80,0.5)'))
-        fig_dd.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Drawdown %")
-        st.plotly_chart(fig_dd, use_container_width=True)
-        st.markdown("**30-Day Rolling Volatility**")
-        roll_vol = returns.rolling(30).std() * np.sqrt(252) * 100
-        fig_vol = go.Figure()
-        fig_vol.add_trace(go.Scatter(x=roll_vol.index, y=roll_vol, line=dict(color='#ff9800')))
-        fig_vol.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Volatility %")
-        st.plotly_chart(fig_vol, use_container_width=True)
-        st.markdown("**Monte Carlo Price Simulation (30 Days)**")
-        if st.button("Run 100 Simulations 🚀"):
-            mc_fig = go.Figure()
-            lp = df['Close'].iloc[-1]
-            for _ in range(100):
-                shocks = np.random.normal(loc=(mean_ret - 0.5*std_dev**2), scale=std_dev, size=30)
-                price_path = lp * np.exp(np.cumsum(shocks))
-                mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line=dict(width=1, color='rgba(38,166,154,0.1)')))
-            mc_fig.update_layout(height=300, showlegend=False, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117')
-            st.plotly_chart(mc_fig, use_container_width=True)
-    with r2c:
-        ann_vol = std_dev * np.sqrt(252) * 100
-        gc = "green" if ann_vol < 15 else "yellow" if ann_vol < 30 else "red"
-        fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=ann_vol, number={'suffix': "%"},
-            gauge={'axis': {'range': [None, 100]}, 'bar': {'color': gc},
-                   'steps': [{'range': [0,15], 'color': 'rgba(0,255,0,0.1)'}, {'range': [15,30], 'color': 'rgba(255,255,0,0.1)'}, {'range': [30,100], 'color': 'rgba(255,0,0,0.1)'}]}))
-        fig_gauge.update_layout(height=250, margin=dict(l=20,r=20,t=20,b=0), paper_bgcolor='#0e1117')
-        st.plotly_chart(fig_gauge, use_container_width=True)
-        st.info(f"**Kelly Criterion:** Optimal: {max(0, kelly)*100:.2f}% des Portfolios")
-        st.info(f"**Sharpe Ratio (ann.):** {sharpe * np.sqrt(252):.2f}")
+    # ======= CHART: QUANTS SUBTAB =======
+    with ch_tab_quants:
+            st.markdown("### 🧮 Advanced Quantitative Risk Analysis")
+            returns = df['Daily_Return'].dropna()
+            mean_ret = returns.mean()
+            std_dev = returns.std()
+            c1, c2, c3, c4 = st.columns(4)
+            var_95 = np.percentile(returns, 5)
+            cvar_95 = returns[returns <= var_95].mean()
+            c1.metric("Value at Risk (95%)", f"{var_95*100:.2f}%")
+            c2.metric("CVaR (Expected Shortfall)", f"{cvar_95*100:.2f}%")
+            rf = 0.02 / 252
+            downside = returns[returns < 0]
+            sortino = (mean_ret - rf) / downside.std() if len(downside) > 0 else 0
+            sharpe = (mean_ret - rf) / std_dev if std_dev > 0 else 0
+            running_max = df['Close'].cummax()
+            drawdown = (df['Close'] - running_max) / running_max
+            max_dd = drawdown.min()
+            calmar = (mean_ret * 252) / abs(max_dd) if max_dd != 0 else 0
+            win_prob = len(returns[returns > 0]) / len(returns)
+            avg_win = returns[returns > 0].mean()
+            avg_loss = abs(returns[returns < 0].mean())
+            wl_ratio = avg_win / avg_loss if avg_loss != 0 else 1
+            kelly = win_prob - ((1 - win_prob) / wl_ratio) if wl_ratio > 0 else 0
+            c3.metric("Sortino Ratio", f"{sortino * np.sqrt(252):.2f}")
+            c4.metric("Calmar Ratio", f"{calmar:.2f}")
 
-# ======= TAB 4: PORTFOLIO =======
-with tab4:
+            st.divider()
+            r1c, r2c = st.columns([2, 1])
+            with r1c:
+                st.markdown("**Max Drawdown (Underwater Chart)**")
+                fig_dd = go.Figure()
+                fig_dd.add_trace(go.Scatter(x=drawdown.index, y=drawdown*100, fill='tozeroy', mode='none', fillcolor='rgba(239,83,80,0.5)'))
+                fig_dd.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Drawdown %")
+                st.plotly_chart(fig_dd, use_container_width=True)
+                st.markdown("**30-Day Rolling Volatility**")
+                roll_vol = returns.rolling(30).std() * np.sqrt(252) * 100
+                fig_vol = go.Figure()
+                fig_vol.add_trace(go.Scatter(x=roll_vol.index, y=roll_vol, line=dict(color='#ff9800')))
+                fig_vol.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Volatility %")
+                st.plotly_chart(fig_vol, use_container_width=True)
+                st.markdown("**Monte Carlo Price Simulation (30 Days)**")
+                if st.button("Run 100 Simulations 🚀"):
+                    mc_fig = go.Figure()
+                    lp = df['Close'].iloc[-1]
+                    for _ in range(100):
+                        shocks = np.random.normal(loc=(mean_ret - 0.5*std_dev**2), scale=std_dev, size=30)
+                        price_path = lp * np.exp(np.cumsum(shocks))
+                        mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line=dict(width=1, color='rgba(38,166,154,0.1)')))
+                    mc_fig.update_layout(height=300, showlegend=False, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117')
+                    st.plotly_chart(mc_fig, use_container_width=True)
+            with r2c:
+                ann_vol = std_dev * np.sqrt(252) * 100
+                gc = "green" if ann_vol < 15 else "yellow" if ann_vol < 30 else "red"
+                fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=ann_vol, number={'suffix': "%"},
+                    gauge={'axis': {'range': [None, 100]}, 'bar': {'color': gc},
+                           'steps': [{'range': [0,15], 'color': 'rgba(0,255,0,0.1)'}, {'range': [15,30], 'color': 'rgba(255,255,0,0.1)'}, {'range': [30,100], 'color': 'rgba(255,0,0,0.1)'}]}))
+                fig_gauge.update_layout(height=250, margin=dict(l=20,r=20,t=20,b=0), paper_bgcolor='#0e1117')
+                st.plotly_chart(fig_gauge, use_container_width=True)
+                st.info(f"**Kelly Criterion:** Optimal: {max(0, kelly)*100:.2f}% des Portfolios")
+                st.info(f"**Sharpe Ratio (ann.):** {sharpe * np.sqrt(252):.2f}")
+
+# ======= PORTFOLIO =======
+with tab_portfolio:
     st.markdown("### 💼 Portfolio Management & Analytics")
     p1, p2 = st.columns([2, 1])
     with p1:
@@ -860,8 +1353,8 @@ with tab4:
         with st.expander("ETF Holdings"):
             st.progress(0.12, text="AAPL (12%)"); st.progress(0.10, text="MSFT (10%)"); st.progress(0.08, text="NVDA (8%)")
 
-# ======= TAB 5: MARKET SCANNER =======
-with tab5:
+# ======= MÄRKTE: SCANNER (secondary section inside tab_markt) =======
+with tab_markt:
     st.markdown("## 🔍 Market Scanner – Alle Märkte gerankt")
     st.markdown("Scannt alle Assets gleichzeitig und rankt sie nach der Indikator-Schmärke. Oben = bester Trade-Einstieg.")
     st.markdown("---")
@@ -978,10 +1471,94 @@ with tab5:
                 st.rerun()
 
         st.markdown("---")
-        st.markdown("##### 📊 Rohdata (vollständige Tabelle)")
+        st.markdown("##### 📊 Rohdaten (vollständige Tabelle)")
         display_cols = ['Symbol', 'Name', 'Score', 'Direction', 'Kurs', '1T %', '5T %', 'RSI', 'ADX', 'Pattern', 'Signale']
         avail_cols = [c for c in display_cols if c in scan_df.columns]
         st.dataframe(scan_df[avail_cols].reset_index(drop=True), use_container_width=True)
+
+        # ── Feature 6: Weekly Report / CSV Download ──────────────────────────────────────
+        st.divider()
+        with st.expander("📄 Wochenbericht & Export"):
+            _sim_st = st.session_state.sim_state
+            _closed = _sim_st.get('closed_trades', [])
+            if _closed:
+                _ct_df = pd.DataFrame(_closed)
+                _wins = len([t for t in _closed if t.get('pnl', 0) > 0])
+                _losses = len([t for t in _closed if t.get('pnl', 0) <= 0])
+                _total_pnl = sum(t.get('pnl', 0) for t in _closed)
+                _best = max(_closed, key=lambda x: x.get('pnl', 0))
+                _worst = min(_closed, key=lambda x: x.get('pnl', 0))
+                _wr_cols = st.columns(4)
+                _wr_cols[0].metric("Abgeschloss. Trades", len(_closed))
+                _wr_cols[1].metric("Win Rate", f"{_wins/len(_closed)*100:.0f}%")
+                _wr_cols[2].metric("Gesamt P&L", f"€{_total_pnl:+,.2f}")
+                _wr_cols[3].metric("Beste Trade", f"{_best.get('symbol','?')} €{_best.get('pnl',0):+.2f}")
+                st.metric("Schlechteste Trade", f"{_worst.get('symbol','?')} €{_worst.get('pnl',0):+.2f}")
+                _csv_data = _ct_df.to_csv(index=False)
+                st.download_button(
+                    "📅 Trades als CSV herunterladen",
+                    data=_csv_data,
+                    file_name=f"trades_{now.strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            else:
+                st.info("Noch keine abgeschlossenen Trades. Starte die Simulation!")
+
+    # ── Feature 10: Gamification Panel ────────────────────────────────────────
+    st.divider()
+    st.markdown("### 🏆 Dein Trading-Fortschritt")
+    _sim_g = st.session_state.sim_state
+    _g_equity = _sim_g.get('equity_curve', [])
+    _g_closed = _sim_g.get('closed_trades', [])
+    _g_start = _sim_g.get('initial_cash', 100_000)
+    _g_current = _g_equity[-1] if _g_equity else _g_start
+    _g_target = _g_start * 2  # Double the money
+    _g_progress = min(1.0, (_g_current - _g_start) / (_g_target - _g_start))
+    
+    _gc1, _gc2, _gc3 = st.columns(3)
+    with _gc1:
+        st.markdown(f"**💰 Kapital**")
+        st.progress(max(0.0, _g_progress), text=f"€{_g_current:,.0f} von €{_g_target:,.0f} Ziel")
+    with _gc2:
+        # Streak counter
+        _streak = 0
+        for _t in reversed(_g_closed):
+            if _t.get('pnl', 0) > 0: _streak += 1
+            else: break
+        _streak_icon = "🔥" * min(_streak, 5) if _streak > 0 else "❄️"
+        st.metric(f"{_streak_icon} Gewinn-Serie", f"{_streak} Trades")
+    with _gc3:
+        # Level system
+        _total_trades = len(_g_closed)
+        _win_rate_g = len([t for t in _g_closed if t.get('pnl', 0) > 0]) / max(1, _total_trades)
+        if _total_trades >= 20 and _win_rate_g >= 0.6 and _g_current > _g_start * 1.3:
+            _level = "👑 Expert"; _level_color = '#ffd700'
+        elif _total_trades >= 10 and _win_rate_g >= 0.5:
+            _level = "🧙 Pro"; _level_color = '#ab47bc'
+        elif _total_trades >= 5:
+            _level = "💼 Trader"; _level_color = '#26a69a'
+        else:
+            _level = "🌱 Rookie"; _level_color = '#9e9e9e'
+        st.markdown(f"<div style='text-align:center; font-size:28px;'>{_level}</div>"
+                    f"<div style='text-align:center; font-size:11px; color:#9e9e9e;'>{_total_trades} Trades abgeschlossen</div>",
+                    unsafe_allow_html=True)
+
+    # Achievements
+    _ach_cols = st.columns(5)
+    _achievements = [
+        ("🌟", "Erster Trade", _total_trades >= 1),
+        ("💥", "5 Trades", _total_trades >= 5),
+        ("📈", "+10% Gewinn", _g_current >= _g_start * 1.1),
+        ("🎯", "60% Win Rate", _win_rate_g >= 0.6 and _total_trades >= 5),
+        ("💰", "Geld verdoppelt", _g_current >= _g_start * 2),
+    ]
+    for _ai, (_ae, _an, _au) in enumerate(_achievements):
+        with _ach_cols[_ai]:
+            _a_style = "opacity:1" if _au else "opacity:0.25; filter:grayscale(1)"
+            st.markdown(f"<div style='text-align:center; {_a_style};'><div style='font-size:28px'>{_ae}</div>"
+                       f"<div style='font-size:10px; color:#9e9e9e;'>{_an}</div></div>",
+                       unsafe_allow_html=True)
 
     else:
         st.info("💡 Drücke den Scan-Button, um alle 26 Assets gleichzeitig mit allen Indikatoren zu analysieren. Das dauert ca. 15–30 Sekunden.")
@@ -1185,8 +1762,8 @@ with tab5:
         st.info("💡 Führe zuerst den Scanner aus und kaufe die Top 10, um das Depot zu starten.")
 
 
-# ======= TAB 6: STRATEGY SIGNALS =======
-with tab6:
+# ======= AI & STRATEGIEN: BACKTEST =======
+with tab_ai:
     st.markdown("### 🎯 Live Strategy Scanner – Einstieg & Ausstieg")
     render_strategy_rules()
 
@@ -1335,9 +1912,8 @@ with tab6:
 - **Fibonacci:** Trailing-SL unter dem Tief der letzten 3-4 Tage. Gewinnziele: Fib 127.2% / 161.8%.
     """)
 
-# ======= TAB 6: AI & ML =======
-# ======= TAB 7: AI & ML =======
-with tab7:
+# ======= AI & STRATEGIEN: AI & ML (continued in same tab) =======
+with tab_ai:
     st.markdown("### 🤖 AI & Machine Learning Suite")
     ai_pick = st.radio("AI-Modul:", ["🧠 Pattern Scanner", "📊 Regime Detection", "🎯 Auto S/R", "📈 Forecast", "📋 Risk Profiler", "📄 AI Report"], horizontal=True)
     returns_ai = df['Daily_Return'].dropna()
