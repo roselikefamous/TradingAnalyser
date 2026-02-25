@@ -5,6 +5,16 @@ A professional-grade trading dashboard built with **Streamlit**, featuring real-
 ## Quickstart (Local)
 
 ```bash
+./start.sh
+```
+
+This creates a virtual environment, installs dependencies, and starts the app.
+
+**Manual steps** (if you prefer):
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
