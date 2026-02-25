@@ -41,9 +41,43 @@ st.markdown(f'<div class="live-clock">{now.strftime("%H:%M:%S")} | {market_statu
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.title("⚙️ Terminal Controls")
-    ticker_input = st.text_input("Primary Ticker", value=st.session_state.tickers[0]).upper()
-    if ticker_input != st.session_state.tickers[0]:
-        st.session_state.tickers[0] = ticker_input
+    
+    # Asset Selection List
+    PREDEFINED_ASSETS = {
+        # Tech & US Blue Chips
+        "AAPL": "Apple Inc.", "MSFT": "Microsoft", "GOOG": "Alphabet (Google)", 
+        "AMZN": "Amazon", "NVDA": "NVIDIA", "TSLA": "Tesla", "META": "Meta Platforms",
+        "AMD": "Advanced Micro Devices", "NFLX": "Netflix", "INTC": "Intel",
+        # DAX & Europe
+        "SAP.DE": "SAP SE", "SIE.DE": "Siemens", "ALV.DE": "Allianz", "BMW.DE": "BMW",
+        "MBG.DE": "Mercedes", "VOW3.DE": "Volkswagen", "RHM.DE": "Rheinmetall",
+        # Crypto
+        "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
+        # Indices & ETFs
+        "SPY": "S&P 500 ETF", "QQQ": "Nasdaq 100 ETF", "DIA": "Dow Jones ETF",
+        # Commodities
+        "GC=F": "Gold", "SI=F": "Silver", "CL=F": "Crude Oil"
+    }
+    
+    current_sym = st.session_state.tickers[0]
+    options = list(PREDEFINED_ASSETS.keys())
+    if current_sym not in options:
+        options.insert(0, current_sym)
+        PREDEFINED_ASSETS[current_sym] = current_sym
+        
+    ticker_input = st.selectbox(
+        "🎯 Asset auswählen", 
+        options=options, 
+        index=options.index(current_sym),
+        format_func=lambda x: f"{x} - {PREDEFINED_ASSETS.get(x, x)}"
+    )
+    
+    custom_ticker = st.text_input("...oder eigenes Symbol (z.B. KO, JPM)", placeholder="Eigenes Symbol eingeben...")
+    
+    final_ticker = custom_ticker.upper() if custom_ticker else ticker_input
+    
+    if final_ticker != st.session_state.tickers[0]:
+        st.session_state.tickers[0] = final_ticker
         st.rerun()
 
     st.markdown("### 📋 Watchlist")
