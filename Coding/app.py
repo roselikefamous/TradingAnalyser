@@ -15,6 +15,7 @@ from indicators import (
 from strategies import strategy_bollinger_scalping, strategy_reversal, strategy_fibonacci_swing, calc_position_size
 from ui_helpers import TERMINAL_CSS, render_signal_card, render_backtest_stats, render_equity_curve, render_strategy_rules, INDICATOR_GUIDE
 from streamlit_autorefresh import st_autorefresh
+from scanner import scan_all_assets, PREDEFINED_ASSETS
 
 st.set_page_config(page_title="Pro Trading Terminal", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
@@ -63,8 +64,7 @@ with st.sidebar:
     options = list(PREDEFINED_ASSETS.keys())
     if current_sym not in options:
         options.insert(0, current_sym)
-        PREDEFINED_ASSETS[current_sym] = current_sym
-        
+    
     ticker_input = st.selectbox(
         "🎯 Asset auswählen", 
         options=options, 
@@ -184,7 +184,7 @@ pct_change = ((current_price - prev_price) / prev_price) * 100
 
 st.markdown(f"## {st.session_state.tickers[0]} <span style='font-size:24px; color:{'#26a69a' if pct_change>=0 else '#ef5350'}'>${current_price:,.2f} ({pct_change:+.2f}%)</span>", unsafe_allow_html=True)
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🕯️ Chart", "🏢 Fundamental", "🎲 Quants", "💼 Portfolio", "🎯 Strategien", "🤖 AI & ML"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🕯️ Chart", "🏢 Fundamental", "🎲 Quants", "💼 Portfolio", "🔍 Scanner", "🎯 Strategien", "🤖 AI & ML"])
 
 # ======= TAB 1: CHART =======
 with tab1:
@@ -824,8 +824,157 @@ with tab4:
         with st.expander("ETF Holdings"):
             st.progress(0.12, text="AAPL (12%)"); st.progress(0.10, text="MSFT (10%)"); st.progress(0.08, text="NVDA (8%)")
 
-# ======= TAB 5: STRATEGY SIGNALS =======
+# ======= TAB 5: MARKET SCANNER =======
 with tab5:
+    st.markdown("## 🔍 Market Scanner – Alle Märkte gerankt")
+    st.markdown("Scannt alle Assets gleichzeitig und rankt sie nach der Indikator-Schmärke. Oben = bester Trade-Einstieg.")
+    st.markdown("---")
+
+    scan_col1, scan_col2, scan_col3 = st.columns([2, 1, 1])
+    with scan_col1:
+        if st.button("🚀 Jetzt alle Märkte scannen", type="primary", use_container_width=True):
+            st.session_state['scanner_running'] = True
+            st.session_state['scanner_results'] = None
+
+    with scan_col2:
+        direction_filter = st.selectbox("Filter", ["Alle", "🟢 NUR KAUFEN", "🟡 NUR NEUTRAL", "🔴 NUR VORSICHT"], label_visibility="collapsed")
+
+    with scan_col3:
+        min_score = st.number_input("🎯 Min. Score", min_value=0, max_value=100, value=0, step=5)
+
+    # Run scanner
+    if st.session_state.get('scanner_running'):
+        progress_bar = st.progress(0, text="🔄 Scanner startet...")
+        status_text = st.empty()
+        results_placeholder = st.empty()
+
+        def update_progress(current, total, symbol):
+            pct = current / total if total > 0 else 0
+            progress_bar.progress(pct, text=f"🔄 Analysiere {symbol}... ({current}/{total})")
+
+        with st.spinner(""):
+            scan_df = scan_all_assets(progress_callback=update_progress)
+
+        progress_bar.progress(1.0, text="✅ Scan abgeschlossen!")
+        st.session_state['scanner_results'] = scan_df
+        st.session_state['scanner_running'] = False
+
+    # Show results
+    if st.session_state.get('scanner_results') is not None:
+        scan_df = st.session_state['scanner_results'].copy()
+
+        # Apply filters
+        if direction_filter == "🟢 NUR KAUFEN":
+            scan_df = scan_df[scan_df['DirectionKey'] == 'BUY']
+        elif direction_filter == "🟡 NUR NEUTRAL":
+            scan_df = scan_df[scan_df['DirectionKey'] == 'NEUTRAL']
+        elif direction_filter == "🔴 NUR VORSICHT":
+            scan_df = scan_df[scan_df['DirectionKey'] == 'SELL']
+
+        if min_score > 0:
+            scan_df = scan_df[scan_df['Score'] >= min_score]
+
+        st.markdown(f"**{len(scan_df)} Assets gefunden** – sortiert nach Score (höchster = starkster Setup)")
+
+        # ── Render ranked cards ──────────────────────
+        for rank_idx, (_, row) in enumerate(scan_df.iterrows(), start=1):
+            dk = row.get('DirectionKey', 'NEUTRAL')
+            if dk == 'BUY':
+                border_color = '#26a69a'
+                bg_color = 'rgba(38,166,154,0.07)'
+                rank_emoji = '🥇' if rank_idx == 1 else '🥈' if rank_idx == 2 else '🥉' if rank_idx == 3 else f'**#{rank_idx}**'
+            elif dk == 'SELL':
+                border_color = '#ef5350'
+                bg_color = 'rgba(239,83,80,0.07)'
+                rank_emoji = f'**#{rank_idx}**'
+            else:
+                border_color = '#ffea00'
+                bg_color = 'rgba(255,234,0,0.04)'
+                rank_emoji = f'**#{rank_idx}**'
+
+            score = row.get('Score', 0)
+            score_bar = '█' * int(score // 10) + '░' * (10 - int(score // 10))
+
+            perf_1d = row.get('1T %', 0) or 0
+            perf_5d = row.get('5T %', 0) or 0
+            perf_1d_color = '#26a69a' if perf_1d >= 0 else '#ef5350'
+            perf_5d_color = '#26a69a' if perf_5d >= 0 else '#ef5350'
+            perf_1d_arrow = '▲' if perf_1d >= 0 else '▼'
+            perf_5d_arrow = '▲' if perf_5d >= 0 else '▼'
+
+            rsi_val = row.get('RSI')
+            adx_val = row.get('ADX')
+            rsi_str = f"RSI&nbsp;<b>{rsi_val}</b>" if rsi_val else ''
+            adx_str = f"ADX&nbsp;<b>{adx_val}</b>" if adx_val else ''
+
+            card_html = f"""
+            <div style='border-left:4px solid {border_color}; background:{bg_color};
+                        padding:12px 18px; margin:6px 0; border-radius:8px;
+                        display:flex; justify-content:space-between; align-items:center;'>
+              <div style='flex:0 0 40px; font-size:18px; text-align:center;'>{rank_emoji}</div>
+              <div style='flex:2; padding: 0 12px;'>
+                <span style='font-size:17px; font-weight:700;'>{row['Symbol']}</span>
+                <span style='font-size:12px; color:#9e9e9e; margin-left:8px;'>{row['Name']}</span><br/>
+                <span style='font-family:monospace; font-size:11px; color:{border_color};'>{score_bar}</span>
+                <span style='font-size:11px; color:#9e9e9e; margin-left:8px;'>{row.get('Pattern','')}</span>
+              </div>
+              <div style='flex:1; text-align:center; font-size:13px;'>
+                <b style='font-size:15px;'>${row['Kurs']:,.2f}</b><br/>
+                <span style='color:{perf_1d_color};'>{perf_1d_arrow} {perf_1d:+.2f}%</span>
+                <span style='color:#555; margin:0 4px;'>|</span>
+                <span style='color:{perf_5d_color};'>{perf_5d_arrow} {perf_5d:+.2f}% (5T)</span>
+              </div>
+              <div style='flex:1; text-align:center;'>
+                <span style='font-size:20px; font-weight:800;'>{score:.0f}</span><br/>
+                <span style='font-size:10px; color:#9e9e9e;'>SCORE</span>
+              </div>
+              <div style='flex:1; text-align:center;'>
+                <span style='font-size:14px;'>{row['Direction']}</span><br/>
+                <span style='font-size:10px; color:#9e9e9e;'>{rsi_str} {adx_str}</span>
+              </div>
+            </div>
+            """
+            st.markdown(card_html, unsafe_allow_html=True)
+
+            # Click-to-load button
+            if st.button(f"📊 {row['Symbol']} laden", key=f"load_{row['Symbol']}_{rank_idx}"):
+                st.session_state.tickers[0] = row['Symbol']
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### 📊 Rohdata (vollständige Tabelle)")
+        display_cols = ['Symbol', 'Name', 'Score', 'Direction', 'Kurs', '1T %', '5T %', 'RSI', 'ADX', 'Pattern', 'Signale']
+        avail_cols = [c for c in display_cols if c in scan_df.columns]
+        st.dataframe(scan_df[avail_cols].reset_index(drop=True), use_container_width=True)
+
+    else:
+        st.info("💡 Drücke den Scan-Button, um alle 26 Assets gleichzeitig mit allen Indikatoren zu analysieren. Das dauert ca. 15–30 Sekunden.")
+        st.markdown("""
+        **Was wird analysiert?**
+        
+        | Kategorie | Assets |
+        |---|---|
+        | 💻 Tech & US | AAPL, MSFT, GOOG, AMZN, NVDA, TSLA, META, AMD, NFLX, INTC |
+        | 🇪🇺 Europa & DAX | SAP.DE, SIE.DE, ALV.DE, BMW.DE, MBG.DE, VOW3.DE, RHM.DE |
+        | ₿ Crypto | BTC-USD, ETH-USD, SOL-USD |
+        | 📊 ETFs & Indizes | SPY, QQQ, DIA |
+        | 🏷️ Rohstoffe | GC=F (Gold), SI=F (Silber), CL=F (Öl) |
+        
+        **Score-Berechnung (0–100 Punkte):**
+        - **Trend (0–30):** EMA-Stack (Preis > EMA9 > EMA21 > EMA55 > SMA200)
+        - **RSI-Zone (0–15):** Bullisches Momentum oder Überkauf-Bounce
+        - **MACD (0–15):** MACD > Signal + beschleunigendes Histogramm
+        - **Bollinger (0–10):** Kurs am unteren Band = Bounce-Potential
+        - **ADX (0–10):** Trend-Stärke (>25 = trending, >40 = stark)
+        - **Stochastik (0–10):** Bullischer Kreuz aus überkaufter Zone
+        - **Candlestick (0–10):** Bullish Engulfing, Hammer, Harami, Doji
+        """)
+
+    if 'scanner_results' not in st.session_state:
+        st.session_state['scanner_results'] = None
+
+# ======= TAB 6: STRATEGY SIGNALS =======
+with tab6:
     st.markdown("### 🎯 Live Strategy Scanner – Einstieg & Ausstieg")
     render_strategy_rules()
 
@@ -975,7 +1124,8 @@ with tab5:
     """)
 
 # ======= TAB 6: AI & ML =======
-with tab6:
+# ======= TAB 7: AI & ML =======
+with tab7:
     st.markdown("### 🤖 AI & Machine Learning Suite")
     ai_pick = st.radio("AI-Modul:", ["🧠 Pattern Scanner", "📊 Regime Detection", "🎯 Auto S/R", "📈 Forecast", "📋 Risk Profiler", "📄 AI Report"], horizontal=True)
     returns_ai = df['Daily_Return'].dropna()
