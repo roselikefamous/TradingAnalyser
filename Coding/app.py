@@ -159,7 +159,7 @@ period = period_map[tf_selection]
 interval = interval_map[tf_selection]
 
 # ================== DATA FETCHING ==================
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=120)
 def fetch_data(ticker, p, i):
     try:
         t = yf.Ticker(ticker)
@@ -632,7 +632,8 @@ with tab2:
             st.markdown(f"### 🏢 {info.get('shortName', st.session_state.tickers[0])}")
             st.write(f"**Sector:** {info.get('sector', 'N/A')}")
             st.write(f"**Industry:** {info.get('industry', 'N/A')}")
-            st.write(f"**Employees:** {info.get('fullTimeEmployees', 'N/A'):,}")
+            emp = info.get('fullTimeEmployees')
+            st.write(f"**Employees:** {emp:,}" if isinstance(emp, (int, float)) and emp else "**Employees:** N/A")
             beta = info.get('beta', 'N/A')
             st.metric("Beta (vs S&P500)", f"{beta:.2f}" if isinstance(beta, (int, float)) else "N/A")
             with st.expander("Summary"):
@@ -646,15 +647,45 @@ with tab2:
             st.metric("Market Cap", mcap_str)
             st.metric("Trailing P/E", f"{info.get('trailingPE', 'N/A')}")
             st.metric("Forward P/E", f"{info.get('forwardPE', 'N/A')}")
-            st.metric("Dividend Yield", f"{info.get('dividendYield', 0)*100:.2f}%" if info.get('dividendYield') else "N/A")
+            # trailingAnnualDividendYield is in decimal form (0.004 = 0.4%)
+            # dividendYield in newer yfinance returns % directly (0.38 = 0.38%)
+            _dy_trail = info.get('trailingAnnualDividendYield')
+            _dy_raw   = info.get('dividendYield')
+            if _dy_trail and _dy_trail > 0:
+                dy_str = f"{_dy_trail * 100:.2f}%"
+            elif _dy_raw and _dy_raw > 0:
+                dy_str = f"{_dy_raw:.2f}%"  # already in % form
+            else:
+                dy_str = "N/A"
+            st.metric("Dividend Yield", dy_str)
             short_ratio = info.get('shortRatio', None)
             if short_ratio: st.metric("Short Interest Ratio", f"{short_ratio:.2f}")
         with f3:
             st.markdown("### 📰 Latest News")
             if news:
                 for idx, n in enumerate(news[:5]):
-                    st.markdown(f"**[{n.get('title', 'Headline')}]({n.get('link', '#')})**")
-                    st.caption(n.get('publisher', 'Unknown'))
+                    # New yfinance schema: news[i] = {"id": ..., "content": {...}}
+                    content = n.get('content') or {}
+                    title = (
+                        content.get('title') or
+                        n.get('title') or
+                        content.get('summary', '')[:80] or
+                        'Artikel lesen'
+                    )
+                    url = (
+                        (content.get('canonicalUrl') or {}).get('url') or
+                        (content.get('clickThroughUrl') or {}).get('url') or
+                        n.get('link') or n.get('url') or '#'
+                    )
+                    publisher = (
+                        (content.get('provider') or {}).get('displayName') or
+                        n.get('publisher') or
+                        (content.get('pubDate') or '')[:10] or
+                        'Yahoo Finance'
+                    )
+                    pub_date = (content.get('pubDate') or '')[:10]
+                    st.markdown(f"**[{title}]({url})**")
+                    st.caption(f"{publisher}" + (f" · {pub_date}" if pub_date else ""))
                     if idx < 4: st.divider()
             else: st.write("No news available.")
     else: st.warning("Fundamental data not available.")

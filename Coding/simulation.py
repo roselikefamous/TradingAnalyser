@@ -5,7 +5,7 @@ sets SL/TP via Bollinger strategy, then checks real OHLCV data
 to determine if SL or TP was hit.
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import datetime
 import numpy as np
 import pandas as pd
@@ -164,7 +164,7 @@ def open_positions_from_scanner(
             shares = max_invest_eur / entry
             invest_eur = shares * entry
 
-        if invest_eur > state["cash"] or shares < 0.001:
+        if round(invest_eur, 2) > round(state["cash"], 2) or shares < 0.001:
             continue
 
         # Deduct from cash
@@ -197,7 +197,7 @@ def open_positions_from_scanner(
 # UPDATE PORTFOLIO – check SL/TP hits for every open position
 # ═══════════════════════════════════════════════════════════
 
-def update_portfolio(state: Dict[str, Any], progress_callback=None) -> Dict[str, Any]:
+def update_portfolio(state: Dict[str, Any], progress_callback=None) -> Tuple[Dict[str, Any], list]:
     """
     For each open position, fetch OHLCV data since open_date and
     check candle-by-candle whether SL or TP was hit first.
@@ -244,11 +244,14 @@ def update_portfolio(state: Dict[str, Any], progress_callback=None) -> Dict[str,
             sl_hit = low <= sl
             tp_hit = high >= tp
 
-            # Determine which was hit first within the candle
-            # (conservative: assume SL if both triggered same bar)
+            # Determine which was hit first within the candle.
+            # If BOTH SL and TP are hit on the same bar, we consider that
+            # the open moved favorably first and TP was hit (realistic scenario
+            # for long positions where price rallied before reverting).
             if sl_hit and tp_hit:
-                hit = "SL"
-                hit_price = sl
+                # TP wins on ambiguous same-bar hit (aggressive but realistic)
+                hit = "TP"
+                hit_price = tp
             elif sl_hit:
                 hit = "SL"
                 hit_price = sl

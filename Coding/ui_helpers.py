@@ -91,6 +91,29 @@ TERMINAL_CSS = """
         border: 1px solid #2d3139; border-radius: 12px;
         padding: 20px; margin: 10px 0;
     }
+    /* ── Sidebar Fixes ─────────────────────────────────────────
+       Prevent text going vertical when sidebar is narrow.     */
+    section[data-testid="stSidebar"] {
+        min-width: 260px !important;
+        writing-mode: horizontal-tb !important;
+    }
+    section[data-testid="stSidebar"] * {
+        writing-mode: horizontal-tb !important;
+        text-orientation: mixed !important;
+    }
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] .stSelectbox,
+    section[data-testid="stSidebar"] .stSlider,
+    section[data-testid="stSidebar"] .stCheckbox {
+        white-space: normal !important;
+    }
+    section[data-testid="stSidebar"] h1 { font-size: 1.1rem !important; }
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0e1117; }
+    ::-webkit-scrollbar-thumb { background: #2d3139; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #26a69a; }
 </style>
 """
 
