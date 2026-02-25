@@ -14,6 +14,7 @@ from indicators import (
 )
 from strategies import strategy_bollinger_scalping, strategy_reversal, strategy_fibonacci_swing, calc_position_size
 from ui_helpers import TERMINAL_CSS, render_signal_card, render_backtest_stats, render_equity_curve, render_strategy_rules, INDICATOR_GUIDE
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Pro Trading Terminal", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
@@ -100,6 +101,15 @@ with st.sidebar:
         ema2_col = st.color_picker("EMA 2 Color", "#ff9800")
         rsi_len = st.number_input("RSI Length", 1, 100, 14)
 
+    st.markdown("---")
+    st.markdown("### ⏱️ Real-Time Refresh")
+    auto_refresh = st.checkbox("Auto-Refresh aktivieren", value=False)
+    refresh_interval = st.number_input("Intervall (Sekunden)", min_value=1, max_value=3600, value=60)
+
+# ================== AUTO REFRESH ==================
+if auto_refresh:
+    st_autorefresh(interval=refresh_interval * 1000, key="data_refresh")
+
 # ================== TIMEFRAMES ==================
 c_tf1, c_tf2 = st.columns([3, 1])
 with c_tf1:
@@ -110,7 +120,7 @@ period = period_map[tf_selection]
 interval = interval_map[tf_selection]
 
 # ================== DATA FETCHING ==================
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=5)
 def fetch_data(ticker, p, i):
     try:
         t = yf.Ticker(ticker)
