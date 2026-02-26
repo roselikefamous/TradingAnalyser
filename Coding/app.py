@@ -84,6 +84,24 @@ if (9 <= now.hour < 10 and now.weekday() < 5 and
     st.session_state.morning_scan_date = _today_str
     st.toast("🌅 Morgenscan läuft automatisch...", icon="📡")
 
+if st.session_state.get('scanner_running'):
+    _prog_container = st.container()
+    progress_bar = _prog_container.progress(0, text="🔄 Scanner startet...")
+    
+    def update_progress(current, total, symbol):
+        pct = current / total if total > 0 else 0
+        progress_bar.progress(pct, text=f"🔄 Analysiere {symbol}... ({current}/{total})")
+
+    with st.spinner(""):
+        scan_df = scan_all_assets(progress_callback=update_progress)
+
+    progress_bar.progress(1.0, text="✅ Scan abgeschlossen!")
+    st.session_state['scanner_results'] = scan_df
+    st.session_state['scanner_running'] = False
+    import time; time.sleep(1) # let user see 100%
+    _prog_container.empty()
+    st.rerun()
+
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.title("⚙️ Terminal Controls")
@@ -232,12 +250,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### ⏱️ Real-Time Refresh")
-    auto_refresh = st.checkbox("Auto-Refresh aktivieren", value=False)
-    refresh_interval = st.number_input("Intervall (Sekunden)", min_value=1, max_value=3600, value=60)
+    st.session_state.auto_refresh = st.checkbox("Auto-Refresh aktivieren", value=st.session_state.get('auto_refresh', False))
+    st.session_state.refresh_interval = st.number_input("Intervall (Sekunden)", min_value=1, max_value=3600, value=st.session_state.get('refresh_interval', 60))
 
 # ================== AUTO REFRESH ==================
-if auto_refresh:
-    st_autorefresh(interval=refresh_interval * 1000, key="data_refresh")
+if st.session_state.get('auto_refresh', False):
+    st_autorefresh(interval=st.session_state.get('refresh_interval', 60) * 1000, key="data_refresh")
 
 # ================== TIMEFRAMES ==================
 c_tf1, c_tf2 = st.columns([3, 1])
@@ -1269,7 +1287,7 @@ with tab_chart:
                     for _ in range(100):
                         shocks = np.random.normal(loc=(mean_ret - 0.5*std_dev**2), scale=std_dev, size=30)
                         price_path = lp * np.exp(np.cumsum(shocks))
-                        mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line=dict(width=1, color='rgba(38,166,154,0.1)')))
+                        mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line={"width": 1, "color": 'rgba(38,166,154,0.1)'}))
                     mc_fig.update_layout(height=300, showlegend=False, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117')
                     st.plotly_chart(mc_fig, use_container_width=True)
             with r2c:
@@ -1352,22 +1370,7 @@ with tab_markt:
     with scan_col3:
         min_score = st.number_input("🎯 Min. Score", min_value=0, max_value=100, value=0, step=5)
 
-    # Run scanner
-    if st.session_state.get('scanner_running'):
-        progress_bar = st.progress(0, text="🔄 Scanner startet...")
-        status_text = st.empty()
-        results_placeholder = st.empty()
-
-        def update_progress(current, total, symbol):
-            pct = current / total if total > 0 else 0
-            progress_bar.progress(pct, text=f"🔄 Analysiere {symbol}... ({current}/{total})")
-
-        with st.spinner(""):
-            scan_df = scan_all_assets(progress_callback=update_progress)
-
-        progress_bar.progress(1.0, text="✅ Scan abgeschlossen!")
-        st.session_state['scanner_results'] = scan_df
-        st.session_state['scanner_running'] = False
+    # Execution logic moved to global scope at the top of the app
 
     # Show results
     if st.session_state.get('scanner_results') is not None:
@@ -1656,7 +1659,7 @@ with tab_markt:
     # ── Open Positions Table ───────────────────────────────────────
     if sim['positions']:
         st.markdown("### 📂 Offene Positionen")
-        for pos in sim['positions']:
+        for idx, pos in enumerate(sim['positions']):
             cur_price = pos.get('current_price', pos['entry'])
             unr_pnl = pos.get('unrealized_pnl', 0.0)
             unr_pct = pos.get('unrealized_pnl_pct', 0.0)
@@ -1685,7 +1688,7 @@ with tab_markt:
             """
             st.markdown(card, unsafe_allow_html=True)
 
-            if st.button(f"📊 {pos['symbol']} Chart laden", key=f"sim_load_{pos['symbol']}"):
+            if st.button(f"📊 {pos['symbol']} Chart laden", key=f"sim_load_{idx}_{pos['symbol']}"):
                 st.session_state.tickers[0] = pos['symbol']
                 st.rerun()
 

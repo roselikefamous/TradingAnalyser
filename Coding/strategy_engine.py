@@ -4,10 +4,10 @@ import pandas as pd
 import numpy as np
 
 def validate_condition(condition: dict, df: pd.DataFrame, current_idx: int = -1) -> bool:
-    \"\"\"
+    """
     Evaluates a single JSON condition against the DataFrame at a specific index.
     Condition format: {"indicator": "RSI_14", "operator": "<", "value": 30}
-    \"\"\"
+    """
     try:
         ind = condition.get("indicator")
         op = condition.get("operator")
@@ -61,10 +61,10 @@ def validate_condition(condition: dict, df: pd.DataFrame, current_idx: int = -1)
         return False
 
 def run_strategies(df: pd.DataFrame, ai_strategies: list) -> dict:
-    \"\"\"
+    """
     Applies the active database rules across the input technical DataFrame.
     Returns a summarized Confluence Result.
-    \"\"\"
+    """
     if df is None or len(df) < 2:
         return {"action": "NEUTRAL", "score": 0, "matching_books": []}
         

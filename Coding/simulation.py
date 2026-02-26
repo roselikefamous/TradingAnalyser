@@ -119,7 +119,7 @@ def _get_bollinger_signal(symbol: str) -> Optional[Dict[str, float]]:
     try:
         bb_mid, bb_upper, bb_lower = calc_bollinger_bands(raw["Close"], 20, 2)
         ema_55 = calc_ema(raw["Close"], 55)
-        stoch_k, _ = calc_stochastic(raw)
+        stoch_k, stoch_d = calc_stochastic(raw)
 
         last_idx = len(raw) - 1
 
