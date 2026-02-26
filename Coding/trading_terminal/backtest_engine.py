@@ -63,7 +63,8 @@ def run_backtest(
             if p["side"] == "LONG":
                 unrealized_value += p["qty"] * close
             else:
-                unrealized_value += p["qty"] * p["entry_price"] + (p["entry_price"] - close) * p["qty"]
+                # Short mark-to-market is a liability against current price.
+                unrealized_value -= p["qty"] * close
         equity = cash + unrealized_value
 
         closed_positions = []
@@ -107,7 +108,7 @@ def run_backtest(
                     gross_pnl = (exec_price - p["entry_price"]) * p["qty"]
                 else:
                     gross_pnl = (p["entry_price"] - exec_price) * p["qty"]
-                    cash += p["qty"] * p["entry_price"] + gross_pnl - fee
+                    cash -= p["qty"] * exec_price + fee
                     
                 net_pnl = gross_pnl - p["entry_fee"] - fee
                 trade = Trade(
@@ -152,7 +153,10 @@ def run_backtest(
                 continue
 
             fee = notional * (cfg.fee_bps / 10000)
-            cash -= (qty * entry_price + fee)
+            if side == "LONG":
+                cash -= (qty * entry_price + fee)
+            else:
+                cash += (qty * entry_price - fee)
             new_pos = {
                 "symbol": sig.symbol,
                 "side": side,
@@ -172,7 +176,7 @@ def run_backtest(
             if p["side"] == "LONG":
                 unrealized_value += p["qty"] * close
             else:
-                unrealized_value += p["qty"] * p["entry_price"] + (p["entry_price"] - close) * p["qty"]
+                unrealized_value -= p["qty"] * close
         equity = cash + unrealized_value
         
         eq_rows.append({"Date": ts, "Equity": equity, "Cash": cash})
@@ -199,7 +203,7 @@ def run_backtest(
             gross_pnl = (exec_price - p["entry_price"]) * p["qty"]
         else:
             gross_pnl = (p["entry_price"] - exec_price) * p["qty"]
-            cash += p["qty"] * p["entry_price"] + gross_pnl - fee
+            cash -= p["qty"] * exec_price + fee
             
         net_pnl = gross_pnl - p["entry_fee"] - fee
         trades.append(

@@ -34,6 +34,25 @@ def test_backtest_executes_tp_trade():
     assert res.trades[0].net_pnl > 0
 
 
+def test_backtest_short_tp_trade_is_profitable():
+    idx = pd.date_range("2025-01-01", periods=3, freq="D")
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0, 100.0],
+            "High": [100.5, 100.2, 100.1],
+            "Low": [99.8, 97.8, 97.5],
+            "Close": [100.0, 98.2, 98.0],
+        },
+        index=idx,
+    )
+    sig = BacktestSignal(date=idx[0], side="SHORT", sl=101.0, tp=98.0, quantity=10, symbol="TEST")
+    res = run_backtest(df, [sig], BacktestConfig(initial_cash=10_000, fee_bps=0.0, slippage_bps=0.0))
+    assert len(res.trades) == 1
+    assert res.trades[0].side == "SHORT"
+    assert res.trades[0].exit_reason == "TP"
+    assert res.trades[0].net_pnl > 0
+
+
 def test_backtest_conservative_when_tp_and_sl_same_bar():
     idx = pd.date_range("2025-01-01", periods=2, freq="D")
     df = pd.DataFrame(
