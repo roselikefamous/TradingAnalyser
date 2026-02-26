@@ -115,6 +115,14 @@ if st.session_state.get('scanner_running'):
 with st.sidebar:
     st.title("⚙️ Terminal Controls")
 
+    st.markdown("### 🧭 Navigation")
+    active_page = st.radio("Gehe zu:", [
+        "🏠 Dashboard & Scanner",
+        "📈 Chart & Setup",
+        "💼 Portfolio"
+    ], label_visibility="collapsed")
+    st.divider()
+
     # ── Phase 8 Feature 8: Einsteiger / Experten Modus ──────────────────────
     mode_col1, mode_col2 = st.columns(2)
     if mode_col1.button("🔰 Einsteiger" if st.session_state.expert_mode else "✅ Einsteiger",
@@ -330,22 +338,17 @@ if (_qs_val and _qs_btn) or (_qs_val and _qs_val != st.session_state.quick_searc
 # Removed legacy quick_score_symbol. The AI Strategy Engine in scanner.py now handles dynamic scoring and MTF alignment.
 
 
-tab_home, tab_markt, tab_chart, tab_portfolio, tab_ai = st.tabs([
-    "🏠 Home", "📡 Märkte & Signale", "📈 Chart & Analyse", "💼 Portfolio", "🤖 AI & Strategien"
-])
-
 # ======= TAB HOME: DASHBOARD =======
-with tab_home:
+if active_page == "🏠 Dashboard & Scanner":
     render_home_tab(now, market_status)
 
 # ======= MÄRKTE: SIGNAL DASHBOARD =======
-with tab_markt:
+if active_page == "🏠 Dashboard & Scanner":
     render_market_signals_section(now)
 
 
-
 # ======= CHART & ANALYSE =======
-with tab_chart:
+if active_page == "📈 Chart & Setup":
     # Inner subtabs: [Chart] [Fundamental] [Risiko & Quants]
     ch_tab_chart, ch_tab_fund, ch_tab_quants = st.tabs([
         "📈 Chart & Indikatoren", "🏢 Fundamental & News", "🧮 Risiko & Quants"
@@ -1042,7 +1045,7 @@ with tab_chart:
                     st.warning(f"**Win Rate:** {win_prob*100:.1f}%\n\n**W/L Ratio:** {wl_ratio:.2f}")
 
 # ======= PORTFOLIO =======
-with tab_portfolio:
+if active_page == "💼 Portfolio":
     st.markdown("### 💼 Portfolio Management & Analytics")
     p1, p2 = st.columns([2, 1], gap="large")
     with p1:
@@ -1127,16 +1130,15 @@ with tab_portfolio:
             st.progress(0.08, text="NVDA (8%)")
 
 # ======= MÄRKTE: SCANNER (secondary section inside tab_markt) =======
-with tab_markt:
+if active_page == "🏠 Dashboard & Scanner":
     render_market_scanner_simulation_section(now)
 
-
 # ======= AI & STRATEGIEN: BACKTEST =======
-with tab_ai:
+if active_page == "📈 Chart & Setup":
     render_ai_strategy_backtest_section(df, current_price)
 
 # ======= AI & STRATEGIEN: AI & ML (continued in same tab) =======
-with tab_ai:
+if active_page == "📈 Chart & Setup":
     render_ai_ml_suite_section(df, current_price, now)
 
 if __name__ == '__main__':

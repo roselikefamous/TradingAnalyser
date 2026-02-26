@@ -18,6 +18,39 @@ from trading_terminal.strategies import (
 )
 from ui_helpers import render_backtest_stats, render_equity_curve, render_strategy_rules
 
+def render_latest_setup_cards(entries):
+    if not entries:
+        st.info("ℹ️ Für die aktuelle Marktphase liegt kein aktives Setup-Signal dieser Strategie vor.")
+        return
+        
+    latest_entry = entries[-1]
+    
+    entry_price = latest_entry.get('Entry', 0)
+    sl_price = latest_entry.get('SL', 0)
+    tp_price = latest_entry.get('TP')
+    
+    if entry_price and sl_price:
+        risk = abs(entry_price - sl_price)
+        # Determine direction
+        direction = latest_entry.get('Type')
+        if not direction:
+            direction = "LONG" if entry_price > sl_price else "SHORT"
+            
+        if not tp_price:
+            tp_price = entry_price + (risk * 2) if direction == "LONG" else entry_price - (risk * 2)
+        
+        try:
+            date_str = latest_entry['Date'].strftime('%d.%m.%Y')
+        except AttributeError:
+            date_str = str(latest_entry['Date'])
+            
+        st.success(f"🔔 **Aktuelles {direction} Setup (Vom {date_str})**")
+        ec1, ec2, ec3 = st.columns(3)
+        ec1.metric("🛒 ENTRY PREIS", f"${entry_price:.2f}")
+        ec2.metric("🛑 STOP LOSS", f"${sl_price:.2f}")
+        ec3.metric("🎯 TAKE PROFIT (Mindestens)", f"${tp_price:.2f}")
+        st.divider()
+
 
 def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) -> None:
     st.markdown("### 🎯 Live Strategy Scanner – Einstieg & Ausstieg")
@@ -29,21 +62,6 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         horizontal=True,
     )
 
-    with st.expander("📐 Positionsgrößen-Rechner (Max 2% Risiko-Regel)", expanded=True):
-        psc1, psc2, psc3 = st.columns(3)
-        capital = psc1.number_input("Gesamtkapital ($)", value=10000.0, step=500.0)
-        risk_pct = psc2.number_input("Risiko pro Trade (%)", value=1.0, min_value=0.1, max_value=5.0, step=0.5)
-        sl_distance_input = psc3.number_input("Stop-Loss Abstand ($)", value=2.0, min_value=0.01, step=0.5)
-        ps_result = compute_position_size(capital, risk_pct, current_price, current_price - sl_distance_input)
-        col_ps1, col_ps2, col_ps3 = st.columns(3)
-        col_ps1.metric("Max. Verlust", f"${ps_result.max_loss:.2f}")
-        col_ps2.metric("Positionsgröße", f"{ps_result.shares} Stück")
-        col_ps3.metric("Investitionsvolumen", f"${ps_result.investment:,.2f}")
-        if ps_result.warning:
-            st.warning("⚠️ Investitionsvolumen übersteigt Gesamtkapital! Reduzieren Sie die Positionsgröße.")
-        if risk_pct > 2.0:
-            st.error("🚫 Risiko über 2%! Die universelle Regel empfiehlt max. 2% pro Trade.")
-
     st.divider()
 
     if "Scalping" in strategy_pick:
@@ -53,6 +71,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         entry_contracts, exit_contracts, backtest, df_s = run_bollinger_scalping(df)
         entries = to_legacy_signal_dicts(entry_contracts)
         exits = to_legacy_exit_dicts(exit_contracts)
+
+        render_latest_setup_cards(entries)
 
         fig_s1 = go.Figure()
         fig_s1.add_trace(
@@ -103,6 +123,9 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         shorts = to_legacy_signal_dicts(short_contracts)
         longs = to_legacy_signal_dicts(long_contracts)
 
+        combined = sorted(shorts + longs, key=lambda x: x['Date'])
+        render_latest_setup_cards(combined)
+
         fig_s2 = go.Figure()
         fig_s2.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
         fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['BB_Upper'], line=dict(color='rgba(255,100,100,0.4)', width=1), name='BB Upper'))
@@ -130,6 +153,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         fib_entry_contracts, fib_exit_contracts, backtest, _, fib_data = run_fibonacci_swing(df)
         fib_entries = to_legacy_signal_dicts(fib_entry_contracts)
         fib_exits = to_legacy_exit_dicts(fib_exit_contracts)
+
+        render_latest_setup_cards(fib_entries)
 
         fig_s3 = go.Figure()
         fig_s3.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
@@ -165,6 +190,9 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         shorts = to_legacy_signal_dicts(short_contracts)
         longs = to_legacy_signal_dicts(long_contracts)
 
+        combined = sorted(shorts + longs, key=lambda x: x['Date'])
+        render_latest_setup_cards(combined)
+
         fig_s4 = go.Figure()
         fig_s4.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
         fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={"color": '#ff9800', "width": 1.5}, name='EMA 21'))
@@ -189,6 +217,9 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         short_contracts, long_contracts, backtest, df_s = run_candlestick_reversal(df)
         shorts = to_legacy_signal_dicts(short_contracts)
         longs = to_legacy_signal_dicts(long_contracts)
+
+        combined = sorted(shorts + longs, key=lambda x: x['Date'])
+        render_latest_setup_cards(combined)
 
         fig_s5 = go.Figure()
         fig_s5.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
