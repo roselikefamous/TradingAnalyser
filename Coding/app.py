@@ -17,7 +17,7 @@ from indicators import (
 from strategies import strategy_bollinger_scalping, strategy_reversal, strategy_fibonacci_swing, calc_position_size
 from ui_helpers import TERMINAL_CSS, render_signal_card, render_backtest_stats, render_equity_curve, render_strategy_rules, INDICATOR_GUIDE
 from streamlit_autorefresh import st_autorefresh
-from scanner import scan_all_assets, PREDEFINED_ASSETS
+from scanner import scan_all_assets, PREDEFINED_ASSETS, score_asset
 from simulation import (
     new_simulation_state, open_positions_from_scanner,
     update_portfolio, get_current_equity, get_simulation_stats
@@ -139,7 +139,7 @@ with st.sidebar:
         format_func=lambda x: f"{x} - {PREDEFINED_ASSETS.get(x, x)}"
     )
     
-    custom_ticker = st.text_input("...oder eigenes Symbol (z.B. KO, JPM)", placeholder="Eigenes Symbol eingeben...")
+    custom_ticker = st.text_input("...oder eigenes Symbol (z.B. KO, JPM)", placeholder="Eigenes Symbol eingeben...", key="custom_ticker_input")
     
     final_ticker = custom_ticker.upper() if custom_ticker else ticker_input
     
@@ -268,7 +268,14 @@ def fetch_data(ticker, p, i):
 
 df, info, news, dividends, earnings_dates = fetch_data(st.session_state.tickers[0], period, interval)
 if df is None or len(df) == 0:
-    st.error(f"❌ Cannot fetch data for {st.session_state.tickers[0]}.")
+    st.error(f"❌ Keine Daten für das Symbol '{st.session_state.tickers[0]}' gefunden. Bitte überprüfe die Schreibweise.")
+    if st.button("🔄 Zurück setzen (Reset)", type="primary"):
+        st.session_state.tickers[0] = "AAPL"
+        if "custom_ticker_input" in st.session_state:
+            st.session_state["custom_ticker_input"] = ""
+        if "quick_search_bar" in st.session_state:
+            st.session_state["quick_search_bar"] = ""
+        st.rerun()
     st.stop()
 
 # ================== APPLY INDICATORS ==================
@@ -296,54 +303,7 @@ if (_qs_val and _qs_btn) or (_qs_val and _qs_val != st.session_state.quick_searc
     st.rerun()
 
 
-@st.cache_data(ttl=300)
-def quick_score_symbol(sym: str):
-    """Returns (score, direction, price, entry, sl, tp, pattern) or None."""
-    try:
-        _t = yf.Ticker(sym)
-        _df = _t.history(period="3mo", interval="1d")
-        if _df is None or len(_df) < 30:
-            return None
-        _df = apply_core_indicators(_df, 9, 21, 14)
-        p = _df['Close'].iloc[-1]
-        atr = _df['ATR'].iloc[-1] if 'ATR' in _df.columns and not pd.isna(_df['ATR'].iloc[-1]) else p * 0.02
-        rsi = _df['RSI'].iloc[-1] if 'RSI' in _df.columns and not pd.isna(_df['RSI'].iloc[-1]) else 50
-        ema1 = _df['EMA_1'].iloc[-1] if 'EMA_1' in _df.columns else p
-        ema2 = _df['EMA_2'].iloc[-1] if 'EMA_2' in _df.columns else p
-        ema55 = _df['EMA_55'].iloc[-1] if 'EMA_55' in _df.columns else p
-        macd_h = _df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in _df.columns and not pd.isna(_df['MACD_Hist'].iloc[-1]) else 0
-        adx = _df['ADX'].iloc[-1] if 'ADX' in _df.columns and not pd.isna(_df['ADX'].iloc[-1]) else 20
-        plus_di = _df['Plus_DI'].iloc[-1] if 'Plus_DI' in _df.columns and not pd.isna(_df['Plus_DI'].iloc[-1]) else 50
-        minus_di = _df['Minus_DI'].iloc[-1] if 'Minus_DI' in _df.columns and not pd.isna(_df['Minus_DI'].iloc[-1]) else 50
-        sc = 0
-        if ema1 > ema2 > ema55: sc += 3
-        elif ema1 < ema2 < ema55: sc -= 3
-        if p > ema1: sc += 1
-        elif p < ema1: sc -= 1
-        if rsi < 35: sc += 2
-        elif rsi > 65: sc -= 2
-        if macd_h > 0: sc += 2
-        elif macd_h < 0: sc -= 2
-        if adx > 25 and plus_di > minus_di: sc += 2
-        elif adx > 25 and minus_di > plus_di: sc -= 2
-        # candle patterns
-        hammer = _df['Hammer'].iloc[-1] if 'Hammer' in _df.columns else False
-        engulf = _df['Bullish_Engulfing'].iloc[-1] if 'Bullish_Engulfing' in _df.columns else False
-        shoot = _df['Shooting_Star'].iloc[-1] if 'Shooting_Star' in _df.columns else False
-        pattern = "🔨 Hammer" if hammer else ("🟢 Engulfing" if engulf else ("⭐ Shooting Star" if shoot else ""))
-        if hammer or engulf: sc += 1
-        if shoot: sc -= 1
-        direction = "BUY" if sc >= 3 else ("SELL" if sc <= -3 else "NEUTRAL")
-        # entry/sl/tp
-        if direction == "BUY":
-            entry = p; sl = p - atr * 1.5; tp = p + atr * 2.5
-        elif direction == "SELL":
-            entry = p; sl = p + atr * 1.5; tp = p - atr * 2.5
-        else:
-            entry = p; sl = p - atr * 1.5; tp = p + atr * 2.0
-        return (sc, direction, p, entry, sl, tp, pattern)
-    except:
-        return None
+# Removed legacy quick_score_symbol. The AI Strategy Engine in scanner.py now handles dynamic scoring and MTF alignment.
 
 
 tab_home, tab_markt, tab_chart, tab_portfolio, tab_ai = st.tabs([
@@ -405,12 +365,20 @@ with tab_home:
     except:
         pass
 
-    with st.spinner("📡 Analysiere Watchlist..."):
+    with st.spinner("📡 Analysiere Markt-Dynamik (AI Strategy Engine)..."):
+        active_strategies = db.get_all_strategies()
         for _hs in _wl_h:
             try:
-                _r = quick_score_symbol(_hs)
+                _r = score_asset(_hs, "", active_strategies)
                 if _r:
-                    sc, d, p, en, sl, tp, pat = _r
+                    sc = _r["Score"]
+                    d = _r["DirectionKey"]
+                    p = _r["Kurs"]
+                    en = _r.get("Entry", p)
+                    sl = _r.get("SL", p * 0.98)
+                    tp = _r.get("TP", p * 1.05)
+                    pat = _r.get("Signale", "")
+
                     if d == "BUY":
                         _buy_h += 1
                         _top_buys_h.append((_hs, sc, d, p, en, sl, tp, pat))
@@ -419,17 +387,17 @@ with tab_home:
                         _top_sells_h.append((_hs, sc, d, p, en, sl, tp, pat))
                     else:
                         _neutral_h += 1
-            except:
-                pass
+            except Exception as e:
+                print(f"Error scanning watch list symbol {_hs}: {e}")
 
     _tot_h = max(_buy_h + _sell_h + _neutral_h, 1)
     _buy_pct_h = _buy_h / _tot_h
     if _buy_pct_h >= 0.6:
-        _ac_h = "#00e676"; _ai_h = "🟢"; _at_h = "BULLISCH – Gute Einstiegsbedingungen"
+        _ac_h = "#00e676"; _ai_h = "🟢"; _at_h = "BULLISCH – Gute Einstiegsbedingungen (AI)"
     elif _buy_pct_h <= 0.3:
-        _ac_h = "#ff1744"; _ai_h = "🔴"; _at_h = "SCHWACH – Abwarten oder Short-Chancen"
+        _ac_h = "#ff1744"; _ai_h = "🔴"; _at_h = "SCHWACH – Abwarten oder Short-Chancen (AI)"
     else:
-        _ac_h = "#ffea00"; _ai_h = "🟡"; _at_h = "GEMISCHT – Selektiv vorgehen"
+        _ac_h = "#ffea00"; _ai_h = "🟡"; _at_h = "GEMISCHT – Selektiv vorgehen (AI)"
 
     st.markdown(f"""
     <div style='background:linear-gradient(135deg,rgba(30,30,40,0.9),rgba(20,20,30,0.95));
@@ -439,7 +407,7 @@ with tab_home:
       <div>
         <div style='font-size:20px; font-weight:800; color:{_ac_h};'>{_at_h}</div>
         <div style='font-size:12px; color:#9e9e9e; margin-top:4px;'>
-          {_buy_h} Kaufsignale &nbsp;|&nbsp; {_sell_h} Verkaufssignale &nbsp;|&nbsp; {_neutral_h} Neutral
+          {_buy_h} KI-Kaufsignale &nbsp;|&nbsp; {_sell_h} KI-Verkaufssignale &nbsp;|&nbsp; {_neutral_h} Neutral
           &nbsp;|&nbsp; {len(_wl_h)} Watchlist-Assets
         </div>
       </div>
@@ -478,24 +446,7 @@ with tab_home:
 
     st.divider()
 
-    # ── Quick actions ─────────────────────────────────────────────────────────
-    st.markdown("### ⚡ Quick Actions")
-    _qa1, _qa2, _qa3, _qa4 = st.columns(4)
-    with _qa1:
-        if st.button("📡 Märkte scannen", use_container_width=True, type="primary"):
-            st.session_state['scanner_running'] = True
-            st.toast("Wechsle zum Reiter '📡 Märkte & Signale', um die Ergebnisse zu sehen!", icon="📡")
-    with _qa2:
-        if st.button("📈 Chart & Analyse", use_container_width=True):
-            st.toast("Wähle ein Asset links in der Sidebar und öffne den Reiter '📈 Chart & Analyse'.", icon="📈")
-    with _qa3:
-        if st.button("💼 Portfolio ansehen", use_container_width=True):
-            st.toast("Klicke oben auf den Reiter '💼 Portfolio', um Positionen zu prüfen.", icon="💼")
-    with _qa4:
-        if st.button("🤖 AI Analyse starten", use_container_width=True):
-            st.toast("Klicke auf den Reiter '🤖 AI & Strategien'.", icon="🤖")
 
-    st.divider()
 
     # ── Latest news for current asset ────────────────────────────────────────
     st.markdown(f"### 📰 Aktuelle News – {st.session_state.tickers[0]}")
@@ -522,17 +473,28 @@ with tab_markt:
     st.markdown("## 🚀 Heutige Handelssignale")
     st.caption("Live-Signale deiner Watchlist – berechnet aus RSI, EMA, MACD, ADX und Support/Resistance.")
 
-    # ── Quick scoring function ──────────────────────────────────────────────
     # ── Compute signals for entire watchlist ────────────────────────────────
     _watchlist_signals = []
     _n_syms = len(st.session_state.watchlist)
     if _n_syms > 0:
-        _prog = st.progress(0, text="📡 Analysiere Watchlist...")
+        _prog = st.progress(0, text="📡 Analysiere Markt-Dynamik (AI Engine)...")
+        active_strategies = db.get_all_strategies()
         for _wi, _wsym in enumerate(st.session_state.watchlist):
-            _prog.progress((_wi + 1) / _n_syms, text=f"📡 {_wsym}...")
-            _res = quick_score_symbol(_wsym)
+            _prog.progress((_wi + 1) / _n_syms, text=f"📡 {_wsym} (MTF AI Scan)...")
+            try:
+                _res = score_asset(_wsym, "", active_strategies)
+            except Exception as e:
+                print(f"Error scanning {_wsym}: {e}")
+                _res = None
             if _res:
-                _watchlist_signals.append((_wsym, *_res))
+                sc = _res["Score"]
+                d = _res["DirectionKey"]
+                p = _res["Kurs"]
+                en = _res.get("Entry", p)
+                sl = _res.get("SL", p * 0.98)
+                tp = _res.get("TP", p * 1.05)
+                pat = _res.get("Signale", "")
+                _watchlist_signals.append((_wsym, sc, d, p, en, sl, tp, pat))
         _prog.empty()
 
     # ── Market Ampel ────────────────────────────────────────────────────────
@@ -1998,8 +1960,8 @@ with tab_ai:
         std_r = returns_ai.std()
         upper = trend_line * (1 + 2*std_r*np.sqrt(np.arange(1, 31)))
         lower = trend_line * (1 - 2*std_r*np.sqrt(np.arange(1, 31)))
-        fig_fc.add_trace(go.Scatter(x=list(future_x), y=upper, mode='lines', line=dict(width=0), showlegend=False))
-        fig_fc.add_trace(go.Scatter(x=list(future_x), y=lower, mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(255,152,0,0.15)', name='95% Konfidenz'))
+        fig_fc.add_trace(go.Scatter(x=list(future_x), y=upper, mode='lines', line={"width": 0}, showlegend=False))
+        fig_fc.add_trace(go.Scatter(x=list(future_x), y=lower, mode='lines', line={"width": 0}, fill='tonexty', fillcolor='rgba(255,152,0,0.15)', name='95% Konfidenz'))
         fig_fc.update_layout(template='plotly_dark', height=350, margin=dict(l=0,r=0,t=10,b=0), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117')
         st.plotly_chart(fig_fc, use_container_width=True)
         st.metric("R²", f"{r_val**2:.4f}"); st.metric("30-Tage Prognose", f"${trend_line[-1]:.2f}")

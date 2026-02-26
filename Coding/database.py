@@ -49,6 +49,29 @@ def init_db():
         )
     ''')
     
+    # 4. Strategies Table (AI Trading Engine)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS strategies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            source_book TEXT,
+            logic_json TEXT NOT NULL,
+            base_weight REAL DEFAULT 1.0
+        )
+    ''')
+    
+    # 5. Trade Feedback Table (ML Loop)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS trade_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER,
+            strategy_id INTEGER,
+            rating INTEGER,
+            comment TEXT,
+            FOREIGN KEY(strategy_id) REFERENCES strategies(id)
+        )
+    ''')
+    
     # Pre-fill watchlist if entirely empty (first launch)
     c.execute("SELECT COUNT(*) FROM watchlist")
     if c.fetchone()[0] == 0:
@@ -63,8 +86,40 @@ def init_db():
         c.execute("INSERT INTO journal (content, last_updated) VALUES (?, ?)",
                   ("", datetime.datetime.now().isoformat()))
                   
+    # Pre-fill default strategies if empty
+    c.execute("SELECT COUNT(*) FROM strategies")
+    if c.fetchone()[0] == 0:
+        _prefill_default_strategies(c)
+                  
     conn.commit()
     conn.close()
+
+def _prefill_default_strategies(cursor):
+    import json
+    # Dummy mock strategies translated from "books"
+    strat1 = {
+        "description": "Buy when RSI is oversold and price crosses above EMA.",
+        "conditions": [
+            {"indicator": "RSI_14", "operator": "<", "value": 35},
+            {"indicator": "Close", "operator": ">", "value": "EMA_21"}
+        ],
+        "action": "BUY"
+    }
+    
+    strat2 = {
+        "description": "Trend Following Breakout",
+        "conditions": [
+            {"indicator": "EMA_9", "operator": ">", "value": "EMA_21"},
+            {"indicator": "ADX_14", "operator": ">", "value": 25}
+        ],
+        "action": "BUY"
+    }
+
+    cursor.execute("INSERT INTO strategies (name, source_book, logic_json, base_weight) VALUES (?, ?, ?, ?)",
+                   ("RSI Reversal", "Mastering the Trade (John Carter)", json.dumps(strat1), 1.0))
+    cursor.execute("INSERT INTO strategies (name, source_book, logic_json, base_weight) VALUES (?, ?, ?, ?)",
+                   ("Moving Average Trend", "Trend Following (Michael Covel)", json.dumps(strat2), 1.0))
+
 
 # --- WATCHLIST CRUD ---
 def get_watchlist():
@@ -183,3 +238,50 @@ def reset_portfolio():
     conn.commit()
     conn.close()
 
+# --- AI STRATEGY ENGINE CRUD ---
+def get_all_strategies():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT id, name, source_book, logic_json, base_weight FROM strategies ORDER BY id ASC")
+    rows = c.fetchall()
+    conn.close()
+    
+    strats = []
+    for r in rows:
+        strats.append({
+            "id": r[0],
+            "name": r[1],
+            "source_book": r[2],
+            "logic_json": r[3],
+            "base_weight": r[4]
+        })
+    return strats
+
+def add_strategy(name: str, source_book: str, logic_json: str, base_weight: float = 1.0):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO strategies (name, source_book, logic_json, base_weight)
+        VALUES (?, ?, ?, ?)
+    ''', (name, source_book, logic_json, base_weight))
+    sid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return sid
+
+def update_strategy_weight(strategy_id: int, new_weight: float):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE strategies SET base_weight = ? WHERE id = ?", (new_weight, strategy_id))
+    conn.commit()
+    conn.close()
+
+def add_trade_feedback(trade_id: int, strategy_id: int, rating: int, comment: str = ""):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute('''
+        INSERT INTO trade_feedback (trade_id, strategy_id, rating, comment)
+        VALUES (?, ?, ?, ?)
+    ''', (trade_id, strategy_id, rating, comment))
+    conn.commit()
+    conn.close()

@@ -13,6 +13,7 @@ from indicators import (
     detect_hammer, detect_bullish_engulfing, detect_harami,
     detect_doji, detect_spinning_top
 )
+from strategy_engine import run_strategies
 
 
 # ═══════════════════════════════════════════════════════════
@@ -58,200 +59,93 @@ PREDEFINED_ASSETS = {
 # SCORING ENGINE
 # ═══════════════════════════════════════════════════════════
 
-def score_asset(symbol: str, name: str) -> Optional[dict]:
+def score_asset(symbol: str, name: str, strategies: list) -> Optional[dict]:
     """
-    Downloads data for a single asset and computes a composite score 0-100.
-
-    Score breakdown:
-      Trend (EMA stack)      0-30 pts
-      RSI momentum zone      0-15 pts
-      MACD alignment         0-15 pts
-      Bollinger Band setup   0-10 pts
-      ADX trend strength     0-10 pts
-      Stochastic crossover   0-10 pts
-      Candlestick pattern    0-10 pts
-
-    Returns a dict with all relevant signal fields, or None on error.
+    Downloads data for a single asset and computes a composite score 0-100
+    using the AI Strategy Engine and Multi-Timeframe (MTF) confluence.
     """
     try:
-        raw = yf.Ticker(symbol).history(period="3mo", interval="1d")
-        if raw is None or raw.empty or len(raw) < 30:
+        # Multi-Timeframe Downloads
+        # 1. Daily Chart for Trend Context
+        raw_1d = yf.Ticker(symbol).history(period="3mo", interval="1d")
+        if raw_1d is None or raw_1d.empty or len(raw_1d) < 30:
             return None
-    except Exception:
-        return None
+            
+        # 2. Hourly Chart for Entry Signals
+        raw_1h = yf.Ticker(symbol).history(period="1mo", interval="1h")
+        if raw_1h is None or raw_1h.empty or len(raw_1h) < 30:
+            return None
+            
+        df_1d = apply_core_indicators(raw_1d)
+        df_1h = apply_core_indicators(raw_1h)
+        
+        # ── MTF Trend Filter (Day Chart) ──
+        last_1d = df_1d.iloc[-1]
+        daily_close = last_1d["Close"]
+        daily_ema21 = last_1d.get("EMA_2", np.nan)
+        daily_ema55 = last_1d.get("EMA_55", np.nan)
+        
+        daily_trend = "NEUTRAL"
+        if not np.isnan(daily_ema21) and not np.isnan(daily_ema55):
+            if daily_close > daily_ema21 > daily_ema55:
+                daily_trend = "BULL"
+            elif daily_close < daily_ema21 < daily_ema55:
+                daily_trend = "BEAR"
 
-    try:
-        df = apply_core_indicators(raw)
-        last = df.iloc[-1]
-        close = last["Close"]
-
-        score = 0
-        signals = []
-
-        # ── 1. TREND SCORE (0-30) ──────────────────────────
-        trend_score = 0
-        bullish_layers = 0
-
-        ema9  = last.get("EMA_1", np.nan)   # configured as EMA_1 (short)
-        ema21 = last.get("EMA_2", np.nan)   # configured as EMA_2 (long)
-        ema55 = last.get("EMA_55", np.nan)
-        sma200 = last.get("SMA_200", np.nan)
-
-        if not np.isnan(ema9)   and close > ema9:   bullish_layers += 1
-        if not np.isnan(ema21)  and close > ema21:  bullish_layers += 1
-        if not np.isnan(ema55)  and close > ema55:  bullish_layers += 1
-        if not np.isnan(sma200) and close > sma200: bullish_layers += 1
-        # Golden cross: EMA9 > EMA21
-        if not np.isnan(ema9) and not np.isnan(ema21) and ema9 > ema21:
-            bullish_layers += 1
-
-        trend_score = bullish_layers * 6  # max 5 layers * 6 = 30
-        score += trend_score
-        if bullish_layers >= 4:
-            signals.append("✅ Starker Aufwärtstrend (EMA-Stack)")
-        elif bullish_layers >= 2:
-            signals.append("➡️ Moderater Trend")
-
-        # ── 2. RSI SCORE (0-15) ────────────────────────────
-        rsi_score = 0
-        rsi = last.get("RSI", np.nan)
-        rsi_label = f"RSI {rsi:.0f}" if not np.isnan(rsi) else "RSI n/a"
-
-        if not np.isnan(rsi):
-            if 50 <= rsi <= 65:          # sweet spot: bullish momentum
-                rsi_score = 15
-                signals.append("✅ RSI Bullisch (50–65)")
-            elif 40 <= rsi < 50:         # neutral-bullish
-                rsi_score = 10
-            elif 30 <= rsi < 40:         # approaching oversold
-                rsi_score = 12
-                signals.append("⚡ RSI Überverkauft-Zone nahe")
-            elif rsi < 30:               # oversold = bounce potential
-                rsi_score = 13
-                signals.append("⚡ RSI Überverkauft (<30)")
-            elif 65 < rsi <= 75:         # getting extended
-                rsi_score = 5
-            else:                        # >75 = very overbought
-                rsi_score = 2
-        score += rsi_score
-
-        # ── 3. MACD SCORE (0-15) ───────────────────────────
-        macd_score = 0
-        macd  = last.get("MACD", np.nan)
-        signal_line = last.get("Signal", np.nan)
-        hist = last.get("MACD_Hist", np.nan)
-        prev_hist = df["MACD_Hist"].iloc[-2] if len(df) >= 2 else np.nan
-
-        if not np.isnan(macd) and not np.isnan(signal_line):
-            if macd > signal_line:
-                macd_score += 7
-                if not np.isnan(hist) and not np.isnan(prev_hist) and hist > prev_hist:
-                    macd_score += 8  # histogram accelerating
-                    signals.append("✅ MACD Bullisch & Beschleunigend")
-                else:
-                    signals.append("✅ MACD über Signal")
-        score += macd_score
-
-        # ── 4. BOLLINGER BAND SCORE (0-10) ─────────────────
-        bb_score = 0
-        bb_lower = last.get("BB_Lower", np.nan)
-        bb_upper = last.get("BB_Upper", np.nan)
-        bb_mid   = last.get("BB_Mid", np.nan)
-
-        if not np.isnan(bb_lower) and not np.isnan(bb_upper) and not np.isnan(bb_mid):
-            bb_range = bb_upper - bb_lower
-            if bb_range > 0:
-                # Near lower band (bounce setup)
-                dist_lower = (close - bb_lower) / bb_range
-                if dist_lower < 0.15:
-                    bb_score = 10
-                    signals.append("⚡ Kurs am unteren Bollinger Band")
-                elif dist_lower < 0.35:
-                    bb_score = 6
-                    signals.append("➡️ Kurs unterhalb BB-Mitte")
-                elif dist_lower > 0.85:
-                    bb_score = 2  # at upper band (overbought risk)
-                else:
-                    bb_score = 4
-        score += bb_score
-
-        # ── 5. ADX TREND STRENGTH (0-10) ───────────────────
-        adx_score = 0
-        adx = last.get("ADX", np.nan)
-        if not np.isnan(adx):
-            if adx >= 40:
-                adx_score = 10
-                signals.append("✅ ADX Starker Trend (>40)")
-            elif adx >= 25:
-                adx_score = 7
-                signals.append("✅ ADX Trend (>25)")
-            elif adx >= 15:
-                adx_score = 3
-        score += adx_score
-
-        # ── 6. STOCHASTIC CROSSOVER (0-10) ─────────────────
-        stoch_score = 0
-        stoch_k = last.get("Stoch_K", np.nan)
-        stoch_d = last.get("Stoch_D", np.nan)
-        prev_k  = df["Stoch_K"].iloc[-2] if len(df) >= 2 else np.nan
-        prev_d  = df["Stoch_D"].iloc[-2] if len(df) >= 2 else np.nan
-
-        if not np.isnan(stoch_k) and not np.isnan(stoch_d):
-            # %K crossed above %D from oversold zone
-            if (not np.isnan(prev_k) and not np.isnan(prev_d)
-                    and prev_k < prev_d and stoch_k > stoch_d and stoch_k < 50):
-                stoch_score = 10
-                signals.append("✅ Stochastik Bullischer Kreuz (überverkauft)")
-            elif stoch_k < 20:
-                stoch_score = 6
-                signals.append("⚡ Stochastik Überverkauft (<20)")
-            elif 40 < stoch_k < 60 and stoch_k > stoch_d:
-                stoch_score = 4
-        score += stoch_score
-
-        # ── 7. CANDLESTICK PATTERN (0-10) ──────────────────
-        pattern_score = 0
-        pattern_name = ""
-        # Check last 3 candles for patterns
-        recent_df = df.iloc[-3:]
-        hammers    = detect_hammer(recent_df)
-        engulfings = detect_bullish_engulfing(recent_df)
-        haramis    = detect_harami(recent_df)
-        dojis      = detect_doji(recent_df)
-
-        if engulfings.any():
-            pattern_score = 10
-            pattern_name = "Bullish Engulfing"
-        elif hammers.any():
-            pattern_score = 8
-            pattern_name = "Hammer"
-        elif haramis.any():
-            pattern_score = 7
-            pattern_name = "Harami"
-        elif dojis.any():
-            pattern_score = 4
-            pattern_name = "Doji"
-
-        if pattern_name:
-            signals.append(f"✅ Pattern: {pattern_name}")
-        score += pattern_score
-
-        # ── DIRECTION LABEL ─────────────────────────────────
-        score = min(100, max(0, score))
-
-        if score >= 65:
-            direction = "🟢 KAUFEN"
-            direction_key = "BUY"
-        elif score >= 45:
-            direction = "🟡 NEUTRAL"
+        # ── AI Strategy Engine (Hour Chart) ──
+        engine_res = run_strategies(df_1h, strategies)
+        
+        raw_action = engine_res['action']
+        score = engine_res['score']
+        matching_books = engine_res['matching_books']
+        
+        # ── Validate MTF Confluence ──
+        # Don't buy on the 1H if the 1D trend is bearish
+        if raw_action == "BUY" and daily_trend == "BEAR":
+            direction = "🟡 NEUTRAL (MTF Block)"
             direction_key = "NEUTRAL"
+            signals = ["1H Buy Blocked by 1D Bear Trend"]
+            score = score * 0.5  # Penalize score
+        elif raw_action == "SELL" and daily_trend == "BULL":
+            direction = "🟡 NEUTRAL (MTF Block)"
+            direction_key = "NEUTRAL"
+            signals = ["1H Sell Blocked by 1D Bull Trend"]
+            score = score * 0.5
         else:
-            direction = "🔴 VORSICHT"
-            direction_key = "SELL"
+            if raw_action == "BUY":
+                direction = "🟢 KAUFEN"
+                direction_key = "BUY"
+            elif raw_action == "SELL":
+                direction = "🔴 VORSICHT"
+                direction_key = "SELL"
+            else:
+                direction = "🟡 NEUTRAL"
+                direction_key = "NEUTRAL"
+                
+            signals = [f"✅ {s[0]} ({s[1]})" for s in matching_books] if matching_books else []
+            if daily_trend == "BULL" and raw_action == "BUY":
+                signals.append("✅ MTF Confluence (1D Bull)")
+                score = min(100, score + 10) # Bonus for MTF alignment
 
-        # 1-day and 5-day performance
-        perf_1d = (df["Close"].iloc[-1] / df["Close"].iloc[-2] - 1) * 100 if len(df) >= 2 else 0
-        perf_5d = (df["Close"].iloc[-1] / df["Close"].iloc[-6] - 1) * 100 if len(df) >= 6 else 0
+        last_1h = df_1h.iloc[-1]
+        close = last_1h["Close"]
+        rsi = last_1h.get("RSI", np.nan)
+        adx = last_1h.get("ADX", np.nan)
+        atr = last_1h.get("ATR", close * 0.02)
+        if np.isnan(atr): atr = close * 0.02
+
+        entry = close
+        sl = 0.0
+        tp = 0.0
+        if raw_action == "BUY":
+            sl = entry - (atr * 1.5)
+            tp = entry + (atr * 2.5)
+        elif raw_action == "SELL":
+            sl = entry + (atr * 1.5)
+            tp = entry - (atr * 2.5)
+
+        perf_1d = (df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-2] - 1) * 100 if len(df_1d) >= 2 else 0
+        perf_5d = (df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-6] - 1) * 100 if len(df_1d) >= 6 else 0
 
         return {
             "Symbol": symbol,
@@ -260,16 +154,20 @@ def score_asset(symbol: str, name: str) -> Optional[dict]:
             "Direction": direction,
             "DirectionKey": direction_key,
             "Kurs": round(close, 2),
+            "Entry": round(entry, 2),
+            "SL": round(sl, 2),
+            "TP": round(tp, 2),
             "1T %": round(perf_1d, 2),
             "5T %": round(perf_5d, 2),
             "RSI": round(rsi, 1) if not np.isnan(rsi) else None,
             "ADX": round(adx, 1) if not np.isnan(adx) else None,
-            "Pattern": pattern_name or "–",
-            "Signale": " | ".join(signals) if signals else "Keine klaren Signale",
-            "EMA_Layers": bullish_layers,
+            "Pattern": f"Trend: {daily_trend}",
+            "Signale": " | ".join(signals) if signals else "Keine Buch-Signale aktiv",
+            "EMA_Layers": 0, # Legacy field
         }
 
     except Exception as e:
+        print(f"Error scanning {symbol}: {e}")
         return None
 
 
@@ -294,11 +192,14 @@ def scan_all_assets(assets: dict = None, progress_callback=None) -> pd.DataFrame
     results = []
     total = len(assets)
 
+    import database
+    active_strategies = database.get_all_strategies()
+
     for i, (symbol, name) in enumerate(assets.items()):
         if progress_callback:
             progress_callback(i, total, symbol)
 
-        result = score_asset(symbol, name)
+        result = score_asset(symbol, name, active_strategies)
         if result:
             results.append(result)
 
