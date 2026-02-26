@@ -6,8 +6,6 @@ import scipy.stats as stats
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime, sys, os
-import database as db
-db.init_db()
 
 from indicators import (
     apply_core_indicators, calc_heikin_ashi, calc_ichimoku, calc_parabolic_sar,
@@ -30,17 +28,13 @@ st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
 if 'tickers' not in st.session_state: st.session_state.tickers = ["AAPL"]
 if 'comparison_tickers' not in st.session_state: st.session_state.comparison_tickers = []
 if 'compare_mode' not in st.session_state: st.session_state.compare_mode = False
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = db.get_watchlist()
+if 'watchlist' not in st.session_state: st.session_state.watchlist = ["AAPL", "MSFT", "GOOG", "TSLA", "BTC-USD"]
 if 'portfolio' not in st.session_state:
-    # Convert DB open positions to DataFrame for legacy portfolio view
-    db_ports = db.get_open_positions()
-    if not db_ports:
-        st.session_state.portfolio = pd.DataFrame(columns=['Symbol', 'Shares', 'EntryPrice'])
-    else:
-        st.session_state.portfolio = pd.DataFrame([{'Symbol': p['symbol'], 'Shares': p['shares'], 'EntryPrice': p['entry_price']} for p in db_ports])
-if 'journal' not in st.session_state:
-    st.session_state.journal = db.get_journal()
+    st.session_state.portfolio = pd.DataFrame([
+        {"Symbol": "AAPL", "Shares": 50, "EntryPrice": 150.0},
+        {"Symbol": "MSFT", "Shares": 30, "EntryPrice": 300.0}
+    ])
+if 'journal' not in st.session_state: st.session_state.journal = ""
 if 'sim_state' not in st.session_state: st.session_state.sim_state = new_simulation_state()
 # — Phase 8 new state —
 if 'expert_mode' not in st.session_state: st.session_state.expert_mode = True
@@ -153,7 +147,6 @@ with st.sidebar:
     if watch_col2.button("➕ Add") and new_ticker:
         if new_ticker.upper() not in st.session_state.watchlist:
             st.session_state.watchlist.append(new_ticker.upper())
-            db.add_to_watchlist(new_ticker.upper())
             st.rerun()
 
     # ── Phase 8 Feature 9: Watchlist Score Badges ───────────────────────────
@@ -172,17 +165,13 @@ with st.sidebar:
             st.rerun()
         if cols[1].button("❌", key=f"del_{sym}"):
             st.session_state.watchlist.remove(sym)
-            db.remove_from_watchlist(sym)
             st.rerun()
 
     with st.expander("🔔 Price Alerts & Journal"):
         st.selectbox("Asset Alert", st.session_state.watchlist, key="alrt")
         st.number_input("Target Price", key="alrtp")
         st.button("Create Alert")
-        new_journal = st.text_area("Trading Journal", value=st.session_state.journal)
-        if new_journal != st.session_state.journal:
-            st.session_state.journal = new_journal
-            db.save_journal(new_journal)
+        st.session_state.journal = st.text_area("Trading Journal", value=st.session_state.journal)
 
     @st.dialog("📚 Chart & Indicator Interpretation Guide")
     def show_interpretation_guide():
@@ -1328,13 +1317,6 @@ with tab_portfolio:
             trade_price = cC.number_input("Entry Price", value=float(current_price))
             if st.button("Buy / Add Position"):
                 new_pos = pd.DataFrame([{"Symbol": trade_sym, "Shares": trade_shares, "EntryPrice": trade_price}])
-                # Persist to DB
-                db.add_position({
-                    'symbol': trade_sym, 'direction': 'BUY',
-                    'entry_price': trade_price, 'sl': trade_price * 0.95,
-                    'tp': trade_price * 1.10, 'shares': trade_shares,
-                    'open_date': datetime.datetime.now().isoformat()
-                })
                 st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_pos], ignore_index=True)
                 st.rerun()
         st.markdown("#### 📅 Monthly Seasonality (10Y)")

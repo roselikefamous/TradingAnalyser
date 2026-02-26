@@ -6,8 +6,6 @@ import scipy.stats as stats
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime, sys, os
-import database as db
-db.init_db()
 
 from indicators import (
     apply_core_indicators, calc_heikin_ashi, calc_ichimoku, calc_parabolic_sar,
@@ -30,17 +28,13 @@ st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
 if 'tickers' not in st.session_state: st.session_state.tickers = ["AAPL"]
 if 'comparison_tickers' not in st.session_state: st.session_state.comparison_tickers = []
 if 'compare_mode' not in st.session_state: st.session_state.compare_mode = False
-if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = db.get_watchlist()
+if 'watchlist' not in st.session_state: st.session_state.watchlist = ["AAPL", "MSFT", "GOOG", "TSLA", "BTC-USD"]
 if 'portfolio' not in st.session_state:
-    # Convert DB open positions to DataFrame for legacy portfolio view
-    db_ports = db.get_open_positions()
-    if not db_ports:
-        st.session_state.portfolio = pd.DataFrame(columns=['Symbol', 'Shares', 'EntryPrice'])
-    else:
-        st.session_state.portfolio = pd.DataFrame([{'Symbol': p['symbol'], 'Shares': p['shares'], 'EntryPrice': p['entry_price']} for p in db_ports])
-if 'journal' not in st.session_state:
-    st.session_state.journal = db.get_journal()
+    st.session_state.portfolio = pd.DataFrame([
+        {"Symbol": "AAPL", "Shares": 50, "EntryPrice": 150.0},
+        {"Symbol": "MSFT", "Shares": 30, "EntryPrice": 300.0}
+    ])
+if 'journal' not in st.session_state: st.session_state.journal = ""
 if 'sim_state' not in st.session_state: st.session_state.sim_state = new_simulation_state()
 # — Phase 8 new state —
 if 'expert_mode' not in st.session_state: st.session_state.expert_mode = True
@@ -153,7 +147,6 @@ with st.sidebar:
     if watch_col2.button("➕ Add") and new_ticker:
         if new_ticker.upper() not in st.session_state.watchlist:
             st.session_state.watchlist.append(new_ticker.upper())
-            db.add_to_watchlist(new_ticker.upper())
             st.rerun()
 
     # ── Phase 8 Feature 9: Watchlist Score Badges ───────────────────────────
@@ -172,17 +165,13 @@ with st.sidebar:
             st.rerun()
         if cols[1].button("❌", key=f"del_{sym}"):
             st.session_state.watchlist.remove(sym)
-            db.remove_from_watchlist(sym)
             st.rerun()
 
     with st.expander("🔔 Price Alerts & Journal"):
         st.selectbox("Asset Alert", st.session_state.watchlist, key="alrt")
         st.number_input("Target Price", key="alrtp")
         st.button("Create Alert")
-        new_journal = st.text_area("Trading Journal", value=st.session_state.journal)
-        if new_journal != st.session_state.journal:
-            st.session_state.journal = new_journal
-            db.save_journal(new_journal)
+        st.session_state.journal = st.text_area("Trading Journal", value=st.session_state.journal)
 
     @st.dialog("📚 Chart & Indicator Interpretation Guide")
     def show_interpretation_guide():
@@ -294,57 +283,6 @@ if (_qs_val and _qs_btn) or (_qs_val and _qs_val != st.session_state.quick_searc
     st.session_state.tickers[0] = _qs_val.upper().strip()
     st.session_state.quick_search = _qs_val.upper().strip()
     st.rerun()
-
-
-@st.cache_data(ttl=300)
-def quick_score_symbol(sym: str):
-    """Returns (score, direction, price, entry, sl, tp, pattern) or None."""
-    try:
-        _t = yf.Ticker(sym)
-        _df = _t.history(period="3mo", interval="1d")
-        if _df is None or len(_df) < 30:
-            return None
-        _df = apply_core_indicators(_df, 9, 21, 14)
-        p = _df['Close'].iloc[-1]
-        atr = _df['ATR'].iloc[-1] if 'ATR' in _df.columns and not pd.isna(_df['ATR'].iloc[-1]) else p * 0.02
-        rsi = _df['RSI'].iloc[-1] if 'RSI' in _df.columns and not pd.isna(_df['RSI'].iloc[-1]) else 50
-        ema1 = _df['EMA_1'].iloc[-1] if 'EMA_1' in _df.columns else p
-        ema2 = _df['EMA_2'].iloc[-1] if 'EMA_2' in _df.columns else p
-        ema55 = _df['EMA_55'].iloc[-1] if 'EMA_55' in _df.columns else p
-        macd_h = _df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in _df.columns and not pd.isna(_df['MACD_Hist'].iloc[-1]) else 0
-        adx = _df['ADX'].iloc[-1] if 'ADX' in _df.columns and not pd.isna(_df['ADX'].iloc[-1]) else 20
-        plus_di = _df['Plus_DI'].iloc[-1] if 'Plus_DI' in _df.columns and not pd.isna(_df['Plus_DI'].iloc[-1]) else 50
-        minus_di = _df['Minus_DI'].iloc[-1] if 'Minus_DI' in _df.columns and not pd.isna(_df['Minus_DI'].iloc[-1]) else 50
-        sc = 0
-        if ema1 > ema2 > ema55: sc += 3
-        elif ema1 < ema2 < ema55: sc -= 3
-        if p > ema1: sc += 1
-        elif p < ema1: sc -= 1
-        if rsi < 35: sc += 2
-        elif rsi > 65: sc -= 2
-        if macd_h > 0: sc += 2
-        elif macd_h < 0: sc -= 2
-        if adx > 25 and plus_di > minus_di: sc += 2
-        elif adx > 25 and minus_di > plus_di: sc -= 2
-        # candle patterns
-        hammer = _df['Hammer'].iloc[-1] if 'Hammer' in _df.columns else False
-        engulf = _df['Bullish_Engulfing'].iloc[-1] if 'Bullish_Engulfing' in _df.columns else False
-        shoot = _df['Shooting_Star'].iloc[-1] if 'Shooting_Star' in _df.columns else False
-        pattern = "🔨 Hammer" if hammer else ("🟢 Engulfing" if engulf else ("⭐ Shooting Star" if shoot else ""))
-        if hammer or engulf: sc += 1
-        if shoot: sc -= 1
-        direction = "BUY" if sc >= 3 else ("SELL" if sc <= -3 else "NEUTRAL")
-        # entry/sl/tp
-        if direction == "BUY":
-            entry = p; sl = p - atr * 1.5; tp = p + atr * 2.5
-        elif direction == "SELL":
-            entry = p; sl = p + atr * 1.5; tp = p - atr * 2.5
-        else:
-            entry = p; sl = p - atr * 1.5; tp = p + atr * 2.0
-        return (sc, direction, p, entry, sl, tp, pattern)
-    except:
-        return None
-
 
 tab_home, tab_markt, tab_chart, tab_portfolio, tab_ai = st.tabs([
     "🏠 Home", "📡 Märkte & Signale", "📈 Chart & Analyse", "💼 Portfolio", "🤖 AI & Strategien"
@@ -471,18 +409,29 @@ with tab_home:
     st.markdown("### ⚡ Quick Actions")
     _qa1, _qa2, _qa3, _qa4 = st.columns(4)
     with _qa1:
-        if st.button("📡 Märkte scannen", use_container_width=True, type="primary"):
-            st.session_state['scanner_running'] = True
-            st.toast("Wechsle zum Reiter '📡 Märkte & Signale', um die Ergebnisse zu sehen!", icon="📡")
+        st.markdown("""
+        <a href="?" style='display:block; text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#1a237e,#283593); color:white; text-decoration:none;
+            font-weight:700; font-size:15px;'>📡 Märkte scannen</a>
+        """, unsafe_allow_html=True)
     with _qa2:
-        if st.button("📈 Chart & Analyse", use_container_width=True):
-            st.toast("Wähle ein Asset links in der Sidebar und öffne den Reiter '📈 Chart & Analyse'.", icon="📈")
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#004d40,#00695c); color:white;
+            font-weight:700; font-size:15px;'>📈 Chart öffnen</div>
+        """, unsafe_allow_html=True)
     with _qa3:
-        if st.button("💼 Portfolio ansehen", use_container_width=True):
-            st.toast("Klicke oben auf den Reiter '💼 Portfolio', um Positionen zu prüfen.", icon="💼")
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#4a148c,#6a1b9a); color:white;
+            font-weight:700; font-size:15px;'>💼 Portfolio ansehen</div>
+        """, unsafe_allow_html=True)
     with _qa4:
-        if st.button("🤖 AI Analyse starten", use_container_width=True):
-            st.toast("Klicke auf den Reiter '🤖 AI & Strategien'.", icon="🤖")
+        st.markdown("""
+        <div style='text-align:center; padding:14px; border-radius:12px;
+            background:linear-gradient(135deg,#b71c1c,#c62828); color:white;
+            font-weight:700; font-size:15px;'>🤖 AI Analyse starten</div>
+        """, unsafe_allow_html=True)
 
     st.divider()
 
@@ -512,6 +461,55 @@ with tab_markt:
     st.caption("Live-Signale deiner Watchlist – berechnet aus RSI, EMA, MACD, ADX und Support/Resistance.")
 
     # ── Quick scoring function ──────────────────────────────────────────────
+    @st.cache_data(ttl=300)
+    def quick_score_symbol(sym: str):
+        """Returns (score, direction, price, entry, sl, tp, pattern) or None."""
+        try:
+            _t = yf.Ticker(sym)
+            _df = _t.history(period="3mo", interval="1d")
+            if _df is None or len(_df) < 30:
+                return None
+            _df = apply_core_indicators(_df, 9, 21, 14)
+            p = _df['Close'].iloc[-1]
+            atr = _df['ATR'].iloc[-1] if 'ATR' in _df.columns and not pd.isna(_df['ATR'].iloc[-1]) else p * 0.02
+            rsi = _df['RSI'].iloc[-1] if 'RSI' in _df.columns and not pd.isna(_df['RSI'].iloc[-1]) else 50
+            ema1 = _df['EMA_1'].iloc[-1] if 'EMA_1' in _df.columns else p
+            ema2 = _df['EMA_2'].iloc[-1] if 'EMA_2' in _df.columns else p
+            ema55 = _df['EMA_55'].iloc[-1] if 'EMA_55' in _df.columns else p
+            macd_h = _df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in _df.columns and not pd.isna(_df['MACD_Hist'].iloc[-1]) else 0
+            adx = _df['ADX'].iloc[-1] if 'ADX' in _df.columns and not pd.isna(_df['ADX'].iloc[-1]) else 20
+            plus_di = _df['Plus_DI'].iloc[-1] if 'Plus_DI' in _df.columns and not pd.isna(_df['Plus_DI'].iloc[-1]) else 50
+            minus_di = _df['Minus_DI'].iloc[-1] if 'Minus_DI' in _df.columns and not pd.isna(_df['Minus_DI'].iloc[-1]) else 50
+            sc = 0
+            if ema1 > ema2 > ema55: sc += 3
+            elif ema1 < ema2 < ema55: sc -= 3
+            if p > ema1: sc += 1
+            elif p < ema1: sc -= 1
+            if rsi < 35: sc += 2
+            elif rsi > 65: sc -= 2
+            if macd_h > 0: sc += 2
+            elif macd_h < 0: sc -= 2
+            if adx > 25 and plus_di > minus_di: sc += 2
+            elif adx > 25 and minus_di > plus_di: sc -= 2
+            # candle patterns
+            hammer = _df['Hammer'].iloc[-1] if 'Hammer' in _df.columns else False
+            engulf = _df['Bullish_Engulfing'].iloc[-1] if 'Bullish_Engulfing' in _df.columns else False
+            shoot = _df['Shooting_Star'].iloc[-1] if 'Shooting_Star' in _df.columns else False
+            pattern = "🔨 Hammer" if hammer else ("🟢 Engulfing" if engulf else ("⭐ Shooting Star" if shoot else ""))
+            if hammer or engulf: sc += 1
+            if shoot: sc -= 1
+            direction = "BUY" if sc >= 3 else ("SELL" if sc <= -3 else "NEUTRAL")
+            # entry/sl/tp
+            if direction == "BUY":
+                entry = p; sl = p - atr * 1.5; tp = p + atr * 2.5
+            elif direction == "SELL":
+                entry = p; sl = p + atr * 1.5; tp = p - atr * 2.5
+            else:
+                entry = p; sl = p - atr * 1.5; tp = p + atr * 2.0
+            return (sc, direction, p, entry, sl, tp, pattern)
+        except:
+            return None
+
     # ── Compute signals for entire watchlist ────────────────────────────────
     _watchlist_signals = []
     _n_syms = len(st.session_state.watchlist)
@@ -638,483 +636,484 @@ with tab_chart:
     with ch_tab_chart:
         plot_df = calc_heikin_ashi(df) if chart_type == "Heikin-Ashi" else df
 
-        # Dynamic subplot building
-        subplots = []
-        row_titles = []
-        if show_volume: subplots.append('Volume'); row_titles.append("Volume")
-        if show_obv: subplots.append('OBV'); row_titles.append("OBV")
-        if show_rsi: subplots.append('RSI'); row_titles.append(f"RSI ({rsi_len})")
-        if show_macd: subplots.append('MACD'); row_titles.append("MACD")
-        if show_stoch: subplots.append('Stoch'); row_titles.append("Stochastic")
-        if show_atr: subplots.append('ATR'); row_titles.append("ATR")
+    # Dynamic subplot building
+    subplots = []
+    row_titles = []
+    if show_volume: subplots.append('Volume'); row_titles.append("Volume")
+    if show_obv: subplots.append('OBV'); row_titles.append("OBV")
+    if show_rsi: subplots.append('RSI'); row_titles.append(f"RSI ({rsi_len})")
+    if show_macd: subplots.append('MACD'); row_titles.append("MACD")
+    if show_stoch: subplots.append('Stoch'); row_titles.append("Stochastic")
+    if show_atr: subplots.append('ATR'); row_titles.append("ATR")
 
-        num_rows = 1 + len(subplots)
-        row_heights = [max(0.4, 1 - 0.15*len(subplots))] + [(1 - max(0.4, 1 - 0.15*len(subplots)))/len(subplots)] * len(subplots) if subplots else [1.0]
+    num_rows = 1 + len(subplots)
+    row_heights = [max(0.4, 1 - 0.15*len(subplots))] + [(1 - max(0.4, 1 - 0.15*len(subplots)))/len(subplots)] * len(subplots) if subplots else [1.0]
 
-        fig = make_subplots(rows=num_rows, cols=1, shared_xaxes=True, vertical_spacing=0.02,
-                            row_heights=row_heights, row_titles=["Price"] + row_titles)
+    fig = make_subplots(rows=num_rows, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                        row_heights=row_heights, row_titles=["Price"] + row_titles)
 
-        # Price chart
-        if chart_type in ["Candlestick", "Heikin-Ashi"]:
-            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'],
-                low=plot_df['Low'], close=plot_df['Close'], name="Price",
-                increasing_line_color='#26a69a', decreasing_line_color='#ef5350'), row=1, col=1)
-        elif chart_type == "Line":
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
-                line=dict(color='#26a69a', width=2), name='Close'), row=1, col=1)
-        elif chart_type == "Area":
-            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
-                line=dict(color='#26a69a', width=2), fill='tozeroy',
-                fillcolor='rgba(38,166,154,0.15)', name='Close'), row=1, col=1)
+    # Price chart
+    if chart_type in ["Candlestick", "Heikin-Ashi"]:
+        fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'],
+            low=plot_df['Low'], close=plot_df['Close'], name="Price",
+            increasing_line_color='#26a69a', decreasing_line_color='#ef5350'), row=1, col=1)
+    elif chart_type == "Line":
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
+            line=dict(color='#26a69a', width=2), name='Close'), row=1, col=1)
+    elif chart_type == "Area":
+        fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
+            line=dict(color='#26a69a', width=2), fill='tozeroy',
+            fillcolor='rgba(38,166,154,0.15)', name='Close'), row=1, col=1)
 
-        # EMA Overlays
-        if show_ema:
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_1'], line=dict(color=ema1_col, width=1.5), name=f'EMA {ema1_len}'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_2'], line=dict(color=ema2_col, width=1.5), name=f'EMA {ema2_len}'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_55'], line=dict(color='#7c4dff', width=1, dash='dot'), name='EMA 55'), row=1, col=1)
+    # EMA Overlays
+    if show_ema:
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA_1'], line=dict(color=ema1_col, width=1.5), name=f'EMA {ema1_len}'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA_2'], line=dict(color=ema2_col, width=1.5), name=f'EMA {ema2_len}'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['EMA_55'], line=dict(color='#7c4dff', width=1, dash='dot'), name='EMA 55'), row=1, col=1)
 
-        # SMA Overlays
-        if show_sma:
-            if 'SMA_50' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#ff9800', width=1.5, dash='dash'), name='SMA 50'), row=1, col=1)
-            if 'SMA_200' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line=dict(color='#f44336', width=1.5, dash='dash'), name='SMA 200'), row=1, col=1)
+    # SMA Overlays
+    if show_sma:
+        if 'SMA_50' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#ff9800', width=1.5, dash='dash'), name='SMA 50'), row=1, col=1)
+        if 'SMA_200' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line=dict(color='#f44336', width=1.5, dash='dash'), name='SMA 200'), row=1, col=1)
 
-        # VWAP
-        if show_vwap and 'VWAP' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#ffeb3b', width=1.5), name='VWAP'), row=1, col=1)
+    # VWAP
+    if show_vwap and 'VWAP' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#ffeb3b', width=1.5), name='VWAP'), row=1, col=1)
 
-        # Ichimoku Cloud
-        if show_ichimoku:
-            tenkan, kijun, senkou_a, senkou_b, chikou = calc_ichimoku(df)
-            fig.add_trace(go.Scatter(x=df.index, y=tenkan, line=dict(color='#2196f3', width=1), name='Tenkan'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=kijun, line=dict(color='#f44336', width=1), name='Kijun'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=senkou_a, line=dict(color='rgba(0,230,118,0.4)', width=0.5), name='Senkou A'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=senkou_b, line=dict(color='rgba(239,83,80,0.4)', width=0.5),
-                fill='tonexty', fillcolor='rgba(38,166,154,0.08)', name='Senkou B'), row=1, col=1)
+    # Ichimoku Cloud
+    if show_ichimoku:
+        tenkan, kijun, senkou_a, senkou_b, chikou = calc_ichimoku(df)
+        fig.add_trace(go.Scatter(x=df.index, y=tenkan, line=dict(color='#2196f3', width=1), name='Tenkan'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=kijun, line=dict(color='#f44336', width=1), name='Kijun'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=senkou_a, line=dict(color='rgba(0,230,118,0.4)', width=0.5), name='Senkou A'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=senkou_b, line=dict(color='rgba(239,83,80,0.4)', width=0.5),
+            fill='tonexty', fillcolor='rgba(38,166,154,0.08)', name='Senkou B'), row=1, col=1)
 
-        # Parabolic SAR
-        if show_sar:
-            sar = calc_parabolic_sar(df)
-            bull_sar = sar.where(sar < df['Close'])
-            bear_sar = sar.where(sar >= df['Close'])
-            fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker=dict(size=3, color='#00e676'), name='SAR Bull'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker=dict(size=3, color='#ff1744'), name='SAR Bear'), row=1, col=1)
+    # Parabolic SAR
+    if show_sar:
+        sar = calc_parabolic_sar(df)
+        bull_sar = sar.where(sar < df['Close'])
+        bear_sar = sar.where(sar >= df['Close'])
+        fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker=dict(size=3, color='#00e676'), name='SAR Bull'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker=dict(size=3, color='#ff1744'), name='SAR Bear'), row=1, col=1)
 
-        # SuperTrend
-        if show_supertrend:
-            st_line, st_dir = calc_supertrend(df)
-            bull_st = st_line.where(st_dir == 1)
-            bear_st = st_line.where(st_dir == -1)
-            fig.add_trace(go.Scatter(x=df.index, y=bull_st, line=dict(color='#00e676', width=2), name='SuperTrend ↑'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=bear_st, line=dict(color='#ff1744', width=2), name='SuperTrend ↓'), row=1, col=1)
+    # SuperTrend
+    if show_supertrend:
+        st_line, st_dir = calc_supertrend(df)
+        bull_st = st_line.where(st_dir == 1)
+        bear_st = st_line.where(st_dir == -1)
+        fig.add_trace(go.Scatter(x=df.index, y=bull_st, line=dict(color='#00e676', width=2), name='SuperTrend ↑'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=bear_st, line=dict(color='#ff1744', width=2), name='SuperTrend ↓'), row=1, col=1)
 
-        # Auto Fibonacci
-        if show_fib:
-            retrace, ext, sh, sl_fib, sh_idx, sl_idx = auto_fibonacci(df)
-            fib_colors = {'23.6%': '#aaa', '38.2%': '#888', '50.0%': '#ff9800', '61.8%': '#f44336', '78.6%': '#9c27b0'}
-            for lvl_name, lvl_val in retrace.items():
-                if lvl_name in fib_colors:
-                    fig.add_hline(y=lvl_val, line_dash="dot", line_color=fib_colors[lvl_name],
-                        annotation_text=f"Fib {lvl_name}", annotation_position="right", row=1, col=1)
+    # Auto Fibonacci
+    if show_fib:
+        retrace, ext, sh, sl_fib, sh_idx, sl_idx = auto_fibonacci(df)
+        fib_colors = {'23.6%': '#aaa', '38.2%': '#888', '50.0%': '#ff9800', '61.8%': '#f44336', '78.6%': '#9c27b0'}
+        for lvl_name, lvl_val in retrace.items():
+            if lvl_name in fib_colors:
+                fig.add_hline(y=lvl_val, line_dash="dot", line_color=fib_colors[lvl_name],
+                    annotation_text=f"Fib {lvl_name}", annotation_position="right", row=1, col=1)
 
-        # Benchmark Overlay
-        if compare_asset != "None":
-            try:
-                comp_df = yf.Ticker(compare_asset).history(period=period, interval=interval)
-                comp_scaled = comp_df['Close'] * (plot_df['Close'].iloc[0] / comp_df['Close'].iloc[0])
-                fig.add_trace(go.Scatter(x=comp_df.index, y=comp_scaled, mode='lines',
-                    line=dict(color='yellow', width=1.5), name=compare_asset), row=1, col=1)
-            except: pass
-
-        # Volume Profile (VRVP) - horizontal volume histogram
-        if show_vrvp:
-            try:
-                price_levels, volumes = calc_volume_profile(df, bins=25)
-                max_vol = max(volumes) if max(volumes) > 0 else 1
-                norm_vols = volumes / max_vol
-                for plv, nv in zip(price_levels, norm_vols):
-                    if nv > 0.05:
-                        fig.add_shape(type="rect", x0=df.index[0], x1=df.index[int(len(df) * nv * 0.3)],
-                            y0=plv - (price_levels[1]-price_levels[0])*0.4,
-                            y1=plv + (price_levels[1]-price_levels[0])*0.4,
-                            fillcolor='rgba(38,166,154,0.2)', line_width=0, row=1, col=1)
-            except: pass
-
-        # Pivot Points
-        if st.checkbox("Show Daily Pivot Points", value=False):
-            pp = (df['High'].shift(1) + df['Low'].shift(1) + df['Close'].shift(1)) / 3
-            r1 = (2 * pp) - df['Low'].shift(1)
-            s1 = (2 * pp) - df['High'].shift(1)
-            fig.add_trace(go.Scatter(x=df.index, y=pp, line=dict(color='#ab47bc', width=1, dash='dot'), name='Pivot'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=r1, line=dict(color='#ef5350', width=1, dash='dot'), name='R1'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=s1, line=dict(color='#26a69a', width=1, dash='dot'), name='S1'), row=1, col=1)
-
-        # Candlestick Pattern Markers
-        doji_idx = df.index[df['Doji']]
-        hammer_idx = df.index[df['Hammer']]
-        engulf_idx = df.index[df['Bullish_Engulfing']]
-        if len(doji_idx) > 0:
-            fig.add_trace(go.Scatter(x=doji_idx, y=df.loc[doji_idx, 'Close'], mode='markers',
-                marker=dict(symbol='diamond', size=7, color='yellow'), name='Doji'), row=1, col=1)
-        if len(hammer_idx) > 0:
-            fig.add_trace(go.Scatter(x=hammer_idx, y=df.loc[hammer_idx, 'Low'] * 0.99, mode='text',
-                text='🔨', textfont=dict(size=12), name='Hammer'), row=1, col=1)
-        if len(engulf_idx) > 0:
-            fig.add_trace(go.Scatter(x=engulf_idx, y=df.loc[engulf_idx, 'High'] * 1.005, mode='text',
-                text='🟢', textfont=dict(size=10), name='Engulfing'), row=1, col=1)
-
-        # Dividend & Earnings overlays
+    # Benchmark Overlay
+    if compare_asset != "None":
         try:
-            if dividends is not None and not dividends.empty:
-                df_start = df.index.min().tz_localize(None) if df.index.tz else df.index.min()
-                for div_date, div_val in dividends.items():
-                    d = div_date.tz_localize(None) if div_date.tzinfo else div_date
-                    if d >= df_start:
-                        fig.add_annotation(x=str(d), y=float(df['Close'].iloc[-1]), text=f"💰 ${div_val:.2f}",
-                            showarrow=True, arrowhead=1, ax=0, ay=-40, row=1, col=1)
-        except: pass
-        try:
-            if earnings_dates is not None and not earnings_dates.empty:
-                df_start = df.index.min().tz_localize(None) if df.index.tz else df.index.min()
-                for earn_date, _ in earnings_dates.iterrows():
-                    d = earn_date.tz_localize(None) if earn_date.tzinfo else earn_date
-                    if d >= df_start:
-                        fig.add_vline(x=str(d), line_dash="dash", line_color="orange", annotation_text="📊", row=1, col=1)
+            comp_df = yf.Ticker(compare_asset).history(period=period, interval=interval)
+            comp_scaled = comp_df['Close'] * (plot_df['Close'].iloc[0] / comp_df['Close'].iloc[0])
+            fig.add_trace(go.Scatter(x=comp_df.index, y=comp_scaled, mode='lines',
+                line=dict(color='yellow', width=1.5), name=compare_asset), row=1, col=1)
         except: pass
 
-        # Sub-chart rows
-        current_row = 2
-        if "Volume" in subplots:
-            colors = ['#26a69a' if row['Close'] >= row['Open'] else '#ef5350' for _, row in df.iterrows()]
-            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=current_row, col=1)
-            current_row += 1
-        if "OBV" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line=dict(color='#ffeb3b', width=1.5), name='OBV'), row=current_row, col=1)
-            current_row += 1
-        if "RSI" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#ab47bc', width=1.5), name='RSI'), row=current_row, col=1)
-            fig.add_hline(y=70, line_dash="dot", line_color="gray", row=current_row, col=1)
-            fig.add_hline(y=30, line_dash="dot", line_color="gray", row=current_row, col=1)
-            fig.add_hline(y=50, line_dash="dot", line_color="rgba(255,255,255,0.1)", row=current_row, col=1)
-            current_row += 1
-        if "MACD" in subplots:
-            fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'],
-                marker_color=['#26a69a' if v > 0 else '#ef5350' for v in df['MACD_Hist']], name='Histogram'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962ff', width=1.5), name='MACD'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line=dict(color='#ff6d00', width=1), name='Signal'), row=current_row, col=1)
-            current_row += 1
-        if "Stoch" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='#2196f3', width=1.5), name='%K'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='#ff9800', width=1), name='%D'), row=current_row, col=1)
-            fig.add_hline(y=80, line_dash="dot", line_color="gray", row=current_row, col=1)
-            fig.add_hline(y=20, line_dash="dot", line_color="gray", row=current_row, col=1)
-            current_row += 1
-        if "ATR" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['ATR'], line=dict(color='#ff9800', width=1.5), name='ATR'), row=current_row, col=1)
-            current_row += 1
-
-        fig.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False,
-            height=800, showlegend=False, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', hovermode="x unified",
-            dragmode='drawline', newshape=dict(line_color='yellow'))
-        if interval in ['1d', '1wk']:
-            fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True,
-            'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawcircle', 'drawrect', 'eraseshape']})
-
-        # ══════════════════════════════════════════════════════════════
-        # 🎯 Always-On Recommendation Banner (Feature 3)
-        # ══════════════════════════════════════════════════════════════
+    # Volume Profile (VRVP) - horizontal volume histogram
+    if show_vrvp:
         try:
-            _banner_rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
-            _banner_ema1 = df['EMA_1'].iloc[-1] if 'EMA_1' in df.columns else current_price
-            _banner_ema2 = df['EMA_2'].iloc[-1] if 'EMA_2' in df.columns else current_price
-            _banner_ema55 = df['EMA_55'].iloc[-1] if 'EMA_55' in df.columns else current_price
-            _banner_macd_h = df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in df.columns and not pd.isna(df['MACD_Hist'].iloc[-1]) else 0
-            _banner_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns and not pd.isna(df['ATR'].iloc[-1]) else current_price * 0.02
-            _banner_sc = 0
-            if _banner_ema1 > _banner_ema2 > _banner_ema55: _banner_sc += 3
-            elif _banner_ema1 < _banner_ema2 < _banner_ema55: _banner_sc -= 3
-            if current_price > _banner_ema1: _banner_sc += 1
-            elif current_price < _banner_ema1: _banner_sc -= 1
-            if _banner_rsi < 35: _banner_sc += 2
-            elif _banner_rsi > 65: _banner_sc -= 2
-            if _banner_macd_h > 0: _banner_sc += 2
-            elif _banner_macd_h < 0: _banner_sc -= 2
-            _banner_entry = current_price
-            _banner_sl = current_price - _banner_atr * 1.5 if _banner_sc >= 3 else current_price + _banner_atr * 1.5
-            _banner_tp = current_price + _banner_atr * 2.5 if _banner_sc >= 3 else current_price - _banner_atr * 2.5
-            # Depot-based risk
-            _d = st.session_state.depot_size
-            _risk2 = _d * 0.02
-            _r_per_share = abs(_banner_entry - _banner_sl)
-            _pos_shares = int(_risk2 / _r_per_share) if _r_per_share > 0 else 0
-            _rr_banner = abs(_banner_tp - _banner_entry) / _r_per_share if _r_per_share > 0 else 0
-            if _banner_sc >= 3:
-                _bc_color = '#00e676'; _b_icon = '🟢'; _b_action = 'KAUFEN'
-                _b_msg = f'KAUFE bei ${_banner_entry:,.2f} • SL ${_banner_sl:,.2f} • TP ${_banner_tp:,.2f} • {_pos_shares} Anteile • Risiko €{_risk2:.0f}'
-            elif _banner_sc <= -3:
-                _bc_color = '#ff1744'; _b_icon = '🔴'; _b_action = 'NICHT KAUFEN'
-                _b_msg = f'Abwärtstrend • SL ${_banner_sl:,.2f} • Ziel ${_banner_tp:,.2f} • Risiko €{_risk2:.0f}'
+            price_levels, volumes = calc_volume_profile(df, bins=25)
+            max_vol = max(volumes) if max(volumes) > 0 else 1
+            norm_vols = volumes / max_vol
+            for plv, nv in zip(price_levels, norm_vols):
+                if nv > 0.05:
+                    fig.add_shape(type="rect", x0=df.index[0], x1=df.index[int(len(df) * nv * 0.3)],
+                        y0=plv - (price_levels[1]-price_levels[0])*0.4,
+                        y1=plv + (price_levels[1]-price_levels[0])*0.4,
+                        fillcolor='rgba(38,166,154,0.2)', line_width=0, row=1, col=1)
+        except: pass
+
+    # Pivot Points
+    if st.checkbox("Show Daily Pivot Points", value=False):
+        pp = (df['High'].shift(1) + df['Low'].shift(1) + df['Close'].shift(1)) / 3
+        r1 = (2 * pp) - df['Low'].shift(1)
+        s1 = (2 * pp) - df['High'].shift(1)
+        fig.add_trace(go.Scatter(x=df.index, y=pp, line=dict(color='#ab47bc', width=1, dash='dot'), name='Pivot'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=r1, line=dict(color='#ef5350', width=1, dash='dot'), name='R1'), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=s1, line=dict(color='#26a69a', width=1, dash='dot'), name='S1'), row=1, col=1)
+
+    # Candlestick Pattern Markers
+    doji_idx = df.index[df['Doji']]
+    hammer_idx = df.index[df['Hammer']]
+    engulf_idx = df.index[df['Bullish_Engulfing']]
+    if len(doji_idx) > 0:
+        fig.add_trace(go.Scatter(x=doji_idx, y=df.loc[doji_idx, 'Close'], mode='markers',
+            marker=dict(symbol='diamond', size=7, color='yellow'), name='Doji'), row=1, col=1)
+    if len(hammer_idx) > 0:
+        fig.add_trace(go.Scatter(x=hammer_idx, y=df.loc[hammer_idx, 'Low'] * 0.99, mode='text',
+            text='🔨', textfont=dict(size=12), name='Hammer'), row=1, col=1)
+    if len(engulf_idx) > 0:
+        fig.add_trace(go.Scatter(x=engulf_idx, y=df.loc[engulf_idx, 'High'] * 1.005, mode='text',
+            text='🟢', textfont=dict(size=10), name='Engulfing'), row=1, col=1)
+
+    # Dividend & Earnings overlays
+    try:
+        if dividends is not None and not dividends.empty:
+            df_start = df.index.min().tz_localize(None) if df.index.tz else df.index.min()
+            for div_date, div_val in dividends.items():
+                d = div_date.tz_localize(None) if div_date.tzinfo else div_date
+                if d >= df_start:
+                    fig.add_annotation(x=str(d), y=float(df['Close'].iloc[-1]), text=f"💰 ${div_val:.2f}",
+                        showarrow=True, arrowhead=1, ax=0, ay=-40, row=1, col=1)
+    except: pass
+    try:
+        if earnings_dates is not None and not earnings_dates.empty:
+            df_start = df.index.min().tz_localize(None) if df.index.tz else df.index.min()
+            for earn_date, _ in earnings_dates.iterrows():
+                d = earn_date.tz_localize(None) if earn_date.tzinfo else earn_date
+                if d >= df_start:
+                    fig.add_vline(x=str(d), line_dash="dash", line_color="orange", annotation_text="📊", row=1, col=1)
+    except: pass
+
+    # Sub-chart rows
+    current_row = 2
+    if "Volume" in subplots:
+        colors = ['#26a69a' if row['Close'] >= row['Open'] else '#ef5350' for _, row in df.iterrows()]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=current_row, col=1)
+        current_row += 1
+    if "OBV" in subplots:
+        fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line=dict(color='#ffeb3b', width=1.5), name='OBV'), row=current_row, col=1)
+        current_row += 1
+    if "RSI" in subplots:
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#ab47bc', width=1.5), name='RSI'), row=current_row, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="gray", row=current_row, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="gray", row=current_row, col=1)
+        fig.add_hline(y=50, line_dash="dot", line_color="rgba(255,255,255,0.1)", row=current_row, col=1)
+        current_row += 1
+    if "MACD" in subplots:
+        fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'],
+            marker_color=['#26a69a' if v > 0 else '#ef5350' for v in df['MACD_Hist']], name='Histogram'), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962ff', width=1.5), name='MACD'), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line=dict(color='#ff6d00', width=1), name='Signal'), row=current_row, col=1)
+        current_row += 1
+    if "Stoch" in subplots:
+        fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='#2196f3', width=1.5), name='%K'), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='#ff9800', width=1), name='%D'), row=current_row, col=1)
+        fig.add_hline(y=80, line_dash="dot", line_color="gray", row=current_row, col=1)
+        fig.add_hline(y=20, line_dash="dot", line_color="gray", row=current_row, col=1)
+        current_row += 1
+    if "ATR" in subplots:
+        fig.add_trace(go.Scatter(x=df.index, y=df['ATR'], line=dict(color='#ff9800', width=1.5), name='ATR'), row=current_row, col=1)
+        current_row += 1
+
+    fig.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False,
+        height=800, showlegend=False, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', hovermode="x unified",
+        dragmode='drawline', newshape=dict(line_color='yellow'))
+    if interval in ['1d', '1wk']:
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True,
+        'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'drawcircle', 'drawrect', 'eraseshape']})
+
+    # ══════════════════════════════════════════════════════════════
+    # 🎯 Always-On Recommendation Banner (Feature 3)
+    # ══════════════════════════════════════════════════════════════
+    try:
+        _banner_rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns and not pd.isna(df['RSI'].iloc[-1]) else 50
+        _banner_ema1 = df['EMA_1'].iloc[-1] if 'EMA_1' in df.columns else current_price
+        _banner_ema2 = df['EMA_2'].iloc[-1] if 'EMA_2' in df.columns else current_price
+        _banner_ema55 = df['EMA_55'].iloc[-1] if 'EMA_55' in df.columns else current_price
+        _banner_macd_h = df['MACD_Hist'].iloc[-1] if 'MACD_Hist' in df.columns and not pd.isna(df['MACD_Hist'].iloc[-1]) else 0
+        _banner_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns and not pd.isna(df['ATR'].iloc[-1]) else current_price * 0.02
+        _banner_sc = 0
+        if _banner_ema1 > _banner_ema2 > _banner_ema55: _banner_sc += 3
+        elif _banner_ema1 < _banner_ema2 < _banner_ema55: _banner_sc -= 3
+        if current_price > _banner_ema1: _banner_sc += 1
+        elif current_price < _banner_ema1: _banner_sc -= 1
+        if _banner_rsi < 35: _banner_sc += 2
+        elif _banner_rsi > 65: _banner_sc -= 2
+        if _banner_macd_h > 0: _banner_sc += 2
+        elif _banner_macd_h < 0: _banner_sc -= 2
+        _banner_entry = current_price
+        _banner_sl = current_price - _banner_atr * 1.5 if _banner_sc >= 3 else current_price + _banner_atr * 1.5
+        _banner_tp = current_price + _banner_atr * 2.5 if _banner_sc >= 3 else current_price - _banner_atr * 2.5
+        # Depot-based risk
+        _d = st.session_state.depot_size
+        _risk2 = _d * 0.02
+        _r_per_share = abs(_banner_entry - _banner_sl)
+        _pos_shares = int(_risk2 / _r_per_share) if _r_per_share > 0 else 0
+        _rr_banner = abs(_banner_tp - _banner_entry) / _r_per_share if _r_per_share > 0 else 0
+        if _banner_sc >= 3:
+            _bc_color = '#00e676'; _b_icon = '🟢'; _b_action = 'KAUFEN'
+            _b_msg = f'KAUFE bei ${_banner_entry:,.2f} • SL ${_banner_sl:,.2f} • TP ${_banner_tp:,.2f} • {_pos_shares} Anteile • Risiko €{_risk2:.0f}'
+        elif _banner_sc <= -3:
+            _bc_color = '#ff1744'; _b_icon = '🔴'; _b_action = 'NICHT KAUFEN'
+            _b_msg = f'Abwärtstrend • SL ${_banner_sl:,.2f} • Ziel ${_banner_tp:,.2f} • Risiko €{_risk2:.0f}'
+        else:
+            _bc_color = '#ffea00'; _b_icon = '🟡'; _b_action = 'ABWARTEN'
+            _b_msg = f'Kein klares Signal. Warte auf Score ≥3. RSI: {_banner_rsi:.0f}'
+        st.markdown(f"""
+        <div style='background:linear-gradient(90deg, rgba(30,30,40,0.85), rgba(20,20,30,0.9));
+                    border:2px solid {_bc_color}; border-radius:12px;
+                    padding:14px 22px; margin:12px 0; display:flex; align-items:center; gap:14px;'>
+          <span style='font-size:36px;'>{_b_icon}</span>
+          <div style='flex:1;'>
+            <div style='font-size:18px; font-weight:800; color:{_bc_color};'>Signal: {_b_action}</div>
+            <div style='font-size:13px; color:#ddd; margin-top:3px;'>{_b_msg}</div>
+          </div>
+          <div style='text-align:right; font-size:12px; color:#9e9e9e;'>Score {_banner_sc} &nbsp;|&nbsp; R:R 1:{_rr_banner:.1f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    except:
+        pass
+
+    # ══════════════════════════════════════════════════════════════
+    # 🎯 Smart Entry Zone Scanner v2
+    # ══════════════════════════════════════════════════════════════
+    if st.button("🎯 Jetzt Einstieg anzeigen", use_container_width=True, type="primary"):
+        st.markdown("---")
+        st.markdown("### 🎯 Smart Entry-Zone Analyse v2")
+        from scipy.cluster.vq import kmeans
+
+        last_price = df['Close'].iloc[-1]
+        atr_now = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else (df['High'].iloc[-1] - df['Low'].iloc[-1])
+
+        # K-Means S/R
+        swing_highs, swing_lows, _, _ = find_swing_points(df)
+        all_pivots = np.array(swing_highs + swing_lows, dtype=float)
+        if len(all_pivots) >= 5:
+            n_clusters = min(6, len(all_pivots))
+            key_levels, _ = kmeans(all_pivots, n_clusters)
+            key_levels = sorted(key_levels)
+        else:
+            key_levels = [df['Low'].iloc[-40:].min() if len(df) >= 40 else df['Low'].min(),
+                          df['Close'].rolling(20).mean().iloc[-1] if len(df) >= 20 else last_price,
+                          df['High'].iloc[-40:].max() if len(df) >= 40 else df['High'].max()]
+            key_levels = sorted(key_levels)
+
+        supports = sorted([l for l in key_levels if l < last_price], reverse=True)
+        resistances = sorted([l for l in key_levels if l > last_price])
+        nearest_support = supports[0] if supports else last_price - atr_now * 2
+        nearest_resistance = resistances[0] if resistances else last_price + atr_now * 2
+        second_resistance = resistances[1] if len(resistances) > 1 else nearest_resistance + atr_now * 2
+        second_support = supports[1] if len(supports) > 1 else nearest_support - atr_now * 2
+
+        # Confluence scoring
+        score = 0
+        max_score = 20
+        signals = []
+
+        last_rsi = df['RSI'].iloc[-1] if not pd.isna(df['RSI'].iloc[-1]) else 50
+        last_macd_hist = df['MACD_Hist'].iloc[-1] if not pd.isna(df['MACD_Hist'].iloc[-1]) else 0
+        last_ema1 = df['EMA_1'].iloc[-1] if not pd.isna(df['EMA_1'].iloc[-1]) else last_price
+        last_ema2 = df['EMA_2'].iloc[-1] if not pd.isna(df['EMA_2'].iloc[-1]) else last_price
+        last_ema55 = df['EMA_55'].iloc[-1] if not pd.isna(df['EMA_55'].iloc[-1]) else last_price
+        last_adx = df['ADX'].iloc[-1] if not pd.isna(df['ADX'].iloc[-1]) else 25
+        last_plus_di = df['Plus_DI'].iloc[-1] if not pd.isna(df['Plus_DI'].iloc[-1]) else 50
+        last_minus_di = df['Minus_DI'].iloc[-1] if not pd.isna(df['Minus_DI'].iloc[-1]) else 50
+        last_bb_lower = df['BB_Lower'].iloc[-1] if not pd.isna(df['BB_Lower'].iloc[-1]) else last_price * 0.95
+        last_bb_upper = df['BB_Upper'].iloc[-1] if not pd.isna(df['BB_Upper'].iloc[-1]) else last_price * 1.05
+        last_bb_mid = df['BB_Mid'].iloc[-1] if not pd.isna(df['BB_Mid'].iloc[-1]) else last_price
+
+        # CHECK 1: ADX
+        if last_adx > 25 and last_plus_di > last_minus_di:
+            score += 3; signals.append(("💪 Starker Aufwärtstrend", f"ADX={last_adx:.0f}, +DI > -DI", "bullish"))
+        elif last_adx > 25 and last_minus_di > last_plus_di:
+            score -= 3; signals.append(("💪 Starker Abwärtstrend", f"ADX={last_adx:.0f}, -DI > +DI", "bearish"))
+        elif last_adx < 20:
+            signals.append(("😴 Seitwärtsmarkt", f"ADX={last_adx:.0f} → Range", "neutral"))
+        else:
+            signals.append(("📊 Moderater Trend", f"ADX={last_adx:.0f}", "neutral"))
+
+        # CHECK 2: EMA Ribbon
+        if last_ema1 > last_ema2 > last_ema55:
+            score += 2; signals.append(("✅ EMA perfekt gestaffelt", "Gesunder Aufwärtstrend", "bullish"))
+        elif last_ema1 < last_ema2 < last_ema55:
+            score -= 2; signals.append(("🔻 EMA bärisch", "Abwärtstrend intakt", "bearish"))
+        elif last_ema1 > last_ema2:
+            score += 1; signals.append(("🟡 EMAs gemischt", "Kurzfristig bullisch", "neutral"))
+        else:
+            score -= 1; signals.append(("⚠️ EMAs negativ", "Kurzfristige Schwäche", "bearish"))
+
+        # CHECK 3: Price vs EMAs
+        above_count = sum([last_price > last_ema1, last_price > last_ema2, last_price > last_ema55])
+        if above_count == 3: score += 2; signals.append(("📈 Über allen EMAs", "Bullisch", "bullish"))
+        elif above_count == 0: score -= 2; signals.append(("📉 Unter allen EMAs", "Bärisch", "bearish"))
+
+        # CHECK 4: RSI + Divergence
+        if len(df) >= 20:
+            p_rec = df['Close'].iloc[-10:]; p_prev = df['Close'].iloc[-20:-10]
+            r_rec = df['RSI'].iloc[-10:]; r_prev = df['RSI'].iloc[-20:-10]
+            if p_rec.min() < p_prev.min() and r_rec.min() > r_prev.min():
+                score += 3; signals.append(("🔮 Bullische RSI-Divergenz!", "Starkes Umkehrsignal", "bullish"))
+            elif p_rec.max() > p_prev.max() and r_rec.max() < r_prev.max():
+                score -= 3; signals.append(("🔮 Bärische RSI-Divergenz!", "Warnung vor Umkehr", "bearish"))
+        if last_rsi < 30: score += 2; signals.append(("🟢 RSI überverkauft", f"RSI={last_rsi:.1f}", "bullish"))
+        elif last_rsi > 70: score -= 2; signals.append(("🔴 RSI überkauft", f"RSI={last_rsi:.1f}", "bearish"))
+
+        # CHECK 5: MACD Momentum
+        hist_vals = df['MACD_Hist'].dropna()
+        if len(hist_vals) >= 3:
+            hist_accel = hist_vals.iloc[-1] - hist_vals.iloc[-2]
+            if last_macd_hist > 0 and hist_accel > 0: score += 2; signals.append(("🚀 MACD Momentum steigend", "Kaufinteresse", "bullish"))
+            elif last_macd_hist < 0 and hist_accel < 0: score -= 2; signals.append(("📉 MACD Momentum fallend", "Verkaufsdruck", "bearish"))
+
+        # CHECK 6: Bollinger
+        bb_width = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Mid']
+        bb_valid = bb_width.dropna()
+        if len(bb_valid) >= 20:
+            if bb_valid.iloc[-1] < bb_valid.iloc[-20:].mean() * 0.7:
+                score += 2; signals.append(("💥 Bollinger Squeeze!", "Explosion erwartet!", "bullish"))
             else:
-                _bc_color = '#ffea00'; _b_icon = '🟡'; _b_action = 'ABWARTEN'
-                _b_msg = f'Kein klares Signal. Warte auf Score ≥3. RSI: {_banner_rsi:.0f}'
+                bb_pct = (last_price - last_bb_lower) / (last_bb_upper - last_bb_lower) if (last_bb_upper - last_bb_lower) > 0 else 0.5
+                if bb_pct < 0.2: score += 1; signals.append(("🟢 Unteres BB", f"BB%={bb_pct:.0%}", "bullish"))
+                elif bb_pct > 0.8: score -= 1; signals.append(("🔴 Oberes BB", f"BB%={bb_pct:.0%}", "bearish"))
+
+        # CHECK 7: Volume
+        if 'Volume' in df.columns and len(df) >= 20:
+            vol_ratio = df['Volume'].iloc[-1] / df['Volume'].iloc[-20:].mean()
+            price_up = df['Close'].iloc[-1] > df['Open'].iloc[-1]
+            if vol_ratio > 1.5 and price_up: score += 2; signals.append(("📊 Hohes Vol + Anstieg", f"{vol_ratio:.1f}x", "bullish"))
+            elif vol_ratio > 1.5 and not price_up: score -= 1; signals.append(("📊 Hohes Vol + Rückgang", f"{vol_ratio:.1f}x", "bearish"))
+
+        # CHECK 8: Candlestick patterns
+        if df['Hammer'].iloc[-1]: score += 1; signals.append(("🔨 Hammer", "Käufer absorbieren", "bullish"))
+        elif df['Shooting_Star'].iloc[-1]: score -= 1; signals.append(("⭐ Shooting Star", "Verkäufer drücken", "bearish"))
+        elif df['Bullish_Engulfing'].iloc[-1]: score += 1; signals.append(("🟢 Bullish Engulfing", "Umkehrsignal", "bullish"))
+        elif df['Bearish_Engulfing'].iloc[-1]: score -= 1; signals.append(("🔴 Bearish Engulfing", "Warnung", "bearish"))
+
+        # CHECK 9: S/R proximity
+        dist_sup = abs(last_price - nearest_support) / last_price * 100
+        dist_res = abs(nearest_resistance - last_price) / last_price * 100
+        if dist_res > dist_sup * 2: score += 2; signals.append(("🎯 Viel Platz nach oben", f"R:{dist_res:.1f}% S:{dist_sup:.1f}%", "bullish"))
+        elif dist_sup > dist_res * 2: score -= 1; signals.append(("⚠️ Wenig Platz oben", f"R:{dist_res:.1f}%", "bearish"))
+
+        # CHECK 10: Stochastic
+        stk = df['Stoch_K'].iloc[-1] if not pd.isna(df['Stoch_K'].iloc[-1]) else 50
+        if stk < 20: score += 1; signals.append(("📉 Stochastik überverkauft", f"%K={stk:.0f}", "bullish"))
+        elif stk > 80: score -= 1; signals.append(("📈 Stochastik überkauft", f"%K={stk:.0f}", "bearish"))
+
+        # Decision
+        regime = "TRENDING" if last_adx > 25 else "RANGING" if last_adx < 20 else "TRANSITIONING"
+        is_bullish = score >= 4
+        is_bearish = score <= -4
+
+        if is_bullish:
+            direction, d_emoji, d_color = "LONG", "🟢", "#00e676"
+            entry_low = min(last_ema1, last_ema2) if regime == "TRENDING" else max(nearest_support, last_bb_lower)
+            entry_high = last_price if regime == "TRENDING" else min(last_price, last_bb_mid)
+            if entry_high <= entry_low: entry_low, entry_high = last_price - atr_now*0.5, last_price
+            sl_level = min(nearest_support - atr_now*0.5, entry_low - atr_now*1.5)
+            target_1, target_2 = nearest_resistance, second_resistance
+            target_3 = max(target_2 + atr_now*1.5, last_price + atr_now*4)
+        elif is_bearish:
+            direction, d_emoji, d_color = "SHORT", "🔴", "#ff1744"
+            entry_low = last_price if regime == "TRENDING" else max(last_price, last_bb_mid)
+            entry_high = max(last_ema1, last_ema2) if regime == "TRENDING" else min(nearest_resistance, last_bb_upper)
+            if entry_high <= entry_low: entry_low, entry_high = last_price, last_price + atr_now*0.5
+            sl_level = max(nearest_resistance + atr_now*0.5, entry_high + atr_now*1.5)
+            target_1, target_2 = nearest_support, second_support
+            target_3 = min(target_2 - atr_now*1.5, last_price - atr_now*4)
+        else:
+            direction, d_emoji, d_color = "ABWARTEN", "🟡", "#ffea00"
+            entry_low, entry_high = nearest_support, nearest_support + atr_now*0.3
+            sl_level = nearest_support - atr_now*1.5
+            target_1, target_2 = nearest_resistance, second_resistance if second_resistance > nearest_resistance else nearest_resistance + atr_now*2
+            target_3 = target_2 + atr_now*1.5
+
+        score_label = "🟢 SEHR STARK" if score >= 8 else "🟢 STARK" if score >= 5 else "🟢 GUT" if score >= 4 else "🟡 NEUTRAL" if score >= 0 else "🔴 SCHWACH" if score >= -3 else "🔴 SEHR SCHWACH"
+        confidence = min(100, max(0, int((score / max_score) * 100)))
+
+        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+        mc1.metric("Richtung", f"{d_emoji} {direction}")
+        mc2.metric("Score", f"{score}/{max_score}")
+        mc3.metric("Bewertung", score_label)
+        mc4.metric("Regime", f"{'📈 Trend' if regime=='TRENDING' else '↔️ Range' if regime=='RANGING' else '🔄 Übergang'}")
+        mc5.metric("Konfidenz", f"{confidence}%")
+
+        # Entry Zone chart
+        fig_ez = go.Figure()
+        pw = min(60, len(df))
+        pd_w = plot_df.iloc[-pw:]
+        fig_ez.add_trace(go.Candlestick(x=pd_w.index, open=pd_w['Open'], high=pd_w['High'], low=pd_w['Low'], close=pd_w['Close'],
+            name="Price", increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
+        df_w = df.iloc[-pw:]
+        fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_1'], line=dict(color=ema1_col, width=1.2), name=f'EMA {ema1_len}'))
+        fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_2'], line=dict(color=ema2_col, width=1.2), name=f'EMA {ema2_len}'))
+        fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Upper'], line=dict(color='rgba(255,255,255,0.12)', width=1), showlegend=False))
+        fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Lower'], line=dict(color='rgba(255,255,255,0.12)', width=1),
+            fill='tonexty', fillcolor='rgba(100,100,255,0.03)', showlegend=False))
+
+        for lvl in key_levels:
+            is_sup = lvl < last_price
+            cl = '#26a69a' if is_sup else '#ef5350'
+            fig_ez.add_hline(y=lvl, line_dash="dashdot", line_color=cl, line_width=1, opacity=0.6,
+                annotation_text=f"{'S' if is_sup else 'R'} ${lvl:.2f}", annotation_position="left",
+                annotation=dict(font=dict(color=cl, size=10)))
+
+        z_color = "rgba(0,230,118,0.15)" if direction=="LONG" else "rgba(255,23,68,0.12)" if direction=="SHORT" else "rgba(255,234,0,0.10)"
+        z_border = "#00e676" if direction=="LONG" else "#ff1744" if direction=="SHORT" else "#ffea00"
+        fig_ez.add_hrect(y0=entry_low, y1=entry_high, fillcolor=z_color, line_width=2, line_color=z_border, line_dash="dash",
+            annotation_text=f"🎯 ENTRY ${entry_low:.2f}–${entry_high:.2f}", annotation_position="top left",
+            annotation=dict(font=dict(color=z_border, size=12)))
+        fig_ez.add_hline(y=sl_level, line_dash="dash", line_color="#ff1744", line_width=2,
+            annotation_text=f"🛑 SL ${sl_level:.2f}", annotation_position="bottom left",
+            annotation=dict(font=dict(color="#ff1744", size=11)))
+        for idx_t, (tgt, tcol, tlbl) in enumerate([(target_1,"#00b0ff","Ziel 1"),(target_2,"#448aff","Ziel 2"),(target_3,"#7c4dff","Ziel 3")]):
+            fig_ez.add_hline(y=tgt, line_dash="dot", line_color=tcol, line_width=1.5,
+                annotation_text=f"{'🎯' if idx_t==0 else '🏆' if idx_t==1 else '💎'} {tlbl}: ${tgt:.2f}",
+                annotation_position="top right", annotation=dict(font=dict(color=tcol, size=10)))
+        fig_ez.add_hline(y=last_price, line_dash="solid", line_color="white", line_width=1.5,
+            annotation_text=f"◀ JETZT ${last_price:.2f}", annotation_position="right",
+            annotation=dict(font=dict(color="white", size=12, family="monospace")))
+        fig_ez.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=130, t=35, b=0),
+            paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False,
+            showlegend=True, legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
+            title=dict(text=f"Entry-Analyse: {st.session_state.tickers[0]} — {d_emoji} {direction} (Score {score}/{max_score})",
+                       font=dict(color=d_color, size=15)))
+        if interval in ['1d','1wk']: fig_ez.update_xaxes(rangebreaks=[dict(bounds=["sat","mon"])])
+        st.plotly_chart(fig_ez, use_container_width=True)
+
+        st.markdown("#### 📊 Signal-Konfluenz Details")
+        for sig_name, sig_desc, sig_type in signals:
+            render_signal_card(sig_name, sig_desc, sig_type)
+
+        # Risk/Reward
+        st.markdown("#### 💰 Risk / Reward Analyse")
+        entry_mid = (entry_low + entry_high) / 2
+        risk = abs(entry_mid - sl_level)
+        rr1 = abs(target_1 - entry_mid) / risk if risk > 0 else 0
+        rr2 = abs(target_2 - entry_mid) / risk if risk > 0 else 0
+        rr3 = abs(target_3 - entry_mid) / risk if risk > 0 else 0
+        rr_verdict = "✅ Akzeptabel" if rr1 >= 1.5 else "⚠️ Grenzwertig" if rr1 >= 1.0 else "❌ Zu riskant"
+        rc1, rc2, rc3, rc4 = st.columns(4)
+        rc1.metric("Risiko (→ SL)", f"${risk:.2f}")
+        rc2.metric("R:R Ziel 1", f"1:{rr1:.1f}")
+        rc3.metric("R:R Ziel 2", f"1:{rr2:.1f}")
+        rc4.metric("R:R Urteil", rr_verdict)
+
+        if direction != "ABWARTEN":
+            st.markdown("#### 📋 Trade-Plan")
             st.markdown(f"""
-            <div style='background:linear-gradient(90deg, rgba(30,30,40,0.85), rgba(20,20,30,0.9));
-                        border:2px solid {_bc_color}; border-radius:12px;
-                        padding:14px 22px; margin:12px 0; display:flex; align-items:center; gap:14px;'>
-              <span style='font-size:36px;'>{_b_icon}</span>
-              <div style='flex:1;'>
-                <div style='font-size:18px; font-weight:800; color:{_bc_color};'>Signal: {_b_action}</div>
-                <div style='font-size:13px; color:#ddd; margin-top:3px;'>{_b_msg}</div>
-              </div>
-              <div style='text-align:right; font-size:12px; color:#9e9e9e;'>Score {_banner_sc} &nbsp;|&nbsp; R:R 1:{_rr_banner:.1f}</div>
-            </div>
-            """, unsafe_allow_html=True)
-        except:
-            pass
-
-        # ══════════════════════════════════════════════════════════════
-        # 🎯 Smart Entry Zone Scanner v2
-        # ══════════════════════════════════════════════════════════════
-        with st.expander("🎯 Jetzt Einstieg anzeigen", expanded=False):
-            st.markdown("### 🎯 Smart Entry-Zone Analyse v2")
-            from scipy.cluster.vq import kmeans
-
-            last_price = df['Close'].iloc[-1]
-            atr_now = df['ATR'].iloc[-1] if not pd.isna(df['ATR'].iloc[-1]) else (df['High'].iloc[-1] - df['Low'].iloc[-1])
-
-            # K-Means S/R
-            swing_highs, swing_lows, _, _ = find_swing_points(df)
-            all_pivots = np.array(swing_highs + swing_lows, dtype=float)
-            if len(all_pivots) >= 5:
-                n_clusters = min(6, len(all_pivots))
-                key_levels, _ = kmeans(all_pivots, n_clusters)
-                key_levels = sorted(key_levels)
-            else:
-                key_levels = [df['Low'].iloc[-40:].min() if len(df) >= 40 else df['Low'].min(),
-                              df['Close'].rolling(20).mean().iloc[-1] if len(df) >= 20 else last_price,
-                              df['High'].iloc[-40:].max() if len(df) >= 40 else df['High'].max()]
-                key_levels = sorted(key_levels)
-
-            supports = sorted([l for l in key_levels if l < last_price], reverse=True)
-            resistances = sorted([l for l in key_levels if l > last_price])
-            nearest_support = supports[0] if supports else last_price - atr_now * 2
-            nearest_resistance = resistances[0] if resistances else last_price + atr_now * 2
-            second_resistance = resistances[1] if len(resistances) > 1 else nearest_resistance + atr_now * 2
-            second_support = supports[1] if len(supports) > 1 else nearest_support - atr_now * 2
-
-            # Confluence scoring
-            score = 0
-            max_score = 20
-            signals = []
-
-            last_rsi = df['RSI'].iloc[-1] if not pd.isna(df['RSI'].iloc[-1]) else 50
-            last_macd_hist = df['MACD_Hist'].iloc[-1] if not pd.isna(df['MACD_Hist'].iloc[-1]) else 0
-            last_ema1 = df['EMA_1'].iloc[-1] if not pd.isna(df['EMA_1'].iloc[-1]) else last_price
-            last_ema2 = df['EMA_2'].iloc[-1] if not pd.isna(df['EMA_2'].iloc[-1]) else last_price
-            last_ema55 = df['EMA_55'].iloc[-1] if not pd.isna(df['EMA_55'].iloc[-1]) else last_price
-            last_adx = df['ADX'].iloc[-1] if not pd.isna(df['ADX'].iloc[-1]) else 25
-            last_plus_di = df['Plus_DI'].iloc[-1] if not pd.isna(df['Plus_DI'].iloc[-1]) else 50
-            last_minus_di = df['Minus_DI'].iloc[-1] if not pd.isna(df['Minus_DI'].iloc[-1]) else 50
-            last_bb_lower = df['BB_Lower'].iloc[-1] if not pd.isna(df['BB_Lower'].iloc[-1]) else last_price * 0.95
-            last_bb_upper = df['BB_Upper'].iloc[-1] if not pd.isna(df['BB_Upper'].iloc[-1]) else last_price * 1.05
-            last_bb_mid = df['BB_Mid'].iloc[-1] if not pd.isna(df['BB_Mid'].iloc[-1]) else last_price
-
-            # CHECK 1: ADX
-            if last_adx > 25 and last_plus_di > last_minus_di:
-                score += 3; signals.append(("💪 Starker Aufwärtstrend", f"ADX={last_adx:.0f}, +DI > -DI", "bullish"))
-            elif last_adx > 25 and last_minus_di > last_plus_di:
-                score -= 3; signals.append(("💪 Starker Abwärtstrend", f"ADX={last_adx:.0f}, -DI > +DI", "bearish"))
-            elif last_adx < 20:
-                signals.append(("😴 Seitwärtsmarkt", f"ADX={last_adx:.0f} → Range", "neutral"))
-            else:
-                signals.append(("📊 Moderater Trend", f"ADX={last_adx:.0f}", "neutral"))
-
-            # CHECK 2: EMA Ribbon
-            if last_ema1 > last_ema2 > last_ema55:
-                score += 2; signals.append(("✅ EMA perfekt gestaffelt", "Gesunder Aufwärtstrend", "bullish"))
-            elif last_ema1 < last_ema2 < last_ema55:
-                score -= 2; signals.append(("🔻 EMA bärisch", "Abwärtstrend intakt", "bearish"))
-            elif last_ema1 > last_ema2:
-                score += 1; signals.append(("🟡 EMAs gemischt", "Kurzfristig bullisch", "neutral"))
-            else:
-                score -= 1; signals.append(("⚠️ EMAs negativ", "Kurzfristige Schwäche", "bearish"))
-
-            # CHECK 3: Price vs EMAs
-            above_count = sum([last_price > last_ema1, last_price > last_ema2, last_price > last_ema55])
-            if above_count == 3: score += 2; signals.append(("📈 Über allen EMAs", "Bullisch", "bullish"))
-            elif above_count == 0: score -= 2; signals.append(("📉 Unter allen EMAs", "Bärisch", "bearish"))
-
-            # CHECK 4: RSI + Divergence
-            if len(df) >= 20:
-                p_rec = df['Close'].iloc[-10:]; p_prev = df['Close'].iloc[-20:-10]
-                r_rec = df['RSI'].iloc[-10:]; r_prev = df['RSI'].iloc[-20:-10]
-                if p_rec.min() < p_prev.min() and r_rec.min() > r_prev.min():
-                    score += 3; signals.append(("🔮 Bullische RSI-Divergenz!", "Starkes Umkehrsignal", "bullish"))
-                elif p_rec.max() > p_prev.max() and r_rec.max() < r_prev.max():
-                    score -= 3; signals.append(("🔮 Bärische RSI-Divergenz!", "Warnung vor Umkehr", "bearish"))
-            if last_rsi < 30: score += 2; signals.append(("🟢 RSI überverkauft", f"RSI={last_rsi:.1f}", "bullish"))
-            elif last_rsi > 70: score -= 2; signals.append(("🔴 RSI überkauft", f"RSI={last_rsi:.1f}", "bearish"))
-
-            # CHECK 5: MACD Momentum
-            hist_vals = df['MACD_Hist'].dropna()
-            if len(hist_vals) >= 3:
-                hist_accel = hist_vals.iloc[-1] - hist_vals.iloc[-2]
-                if last_macd_hist > 0 and hist_accel > 0: score += 2; signals.append(("🚀 MACD Momentum steigend", "Kaufinteresse", "bullish"))
-                elif last_macd_hist < 0 and hist_accel < 0: score -= 2; signals.append(("📉 MACD Momentum fallend", "Verkaufsdruck", "bearish"))
-
-            # CHECK 6: Bollinger
-            bb_width = (df['BB_Upper'] - df['BB_Lower']) / df['BB_Mid']
-            bb_valid = bb_width.dropna()
-            if len(bb_valid) >= 20:
-                if bb_valid.iloc[-1] < bb_valid.iloc[-20:].mean() * 0.7:
-                    score += 2; signals.append(("💥 Bollinger Squeeze!", "Explosion erwartet!", "bullish"))
-                else:
-                    bb_pct = (last_price - last_bb_lower) / (last_bb_upper - last_bb_lower) if (last_bb_upper - last_bb_lower) > 0 else 0.5
-                    if bb_pct < 0.2: score += 1; signals.append(("🟢 Unteres BB", f"BB%={bb_pct:.0%}", "bullish"))
-                    elif bb_pct > 0.8: score -= 1; signals.append(("🔴 Oberes BB", f"BB%={bb_pct:.0%}", "bearish"))
-
-            # CHECK 7: Volume
-            if 'Volume' in df.columns and len(df) >= 20:
-                vol_ratio = df['Volume'].iloc[-1] / df['Volume'].iloc[-20:].mean()
-                price_up = df['Close'].iloc[-1] > df['Open'].iloc[-1]
-                if vol_ratio > 1.5 and price_up: score += 2; signals.append(("📊 Hohes Vol + Anstieg", f"{vol_ratio:.1f}x", "bullish"))
-                elif vol_ratio > 1.5 and not price_up: score -= 1; signals.append(("📊 Hohes Vol + Rückgang", f"{vol_ratio:.1f}x", "bearish"))
-
-            # CHECK 8: Candlestick patterns
-            if df['Hammer'].iloc[-1]: score += 1; signals.append(("🔨 Hammer", "Käufer absorbieren", "bullish"))
-            elif df['Shooting_Star'].iloc[-1]: score -= 1; signals.append(("⭐ Shooting Star", "Verkäufer drücken", "bearish"))
-            elif df['Bullish_Engulfing'].iloc[-1]: score += 1; signals.append(("🟢 Bullish Engulfing", "Umkehrsignal", "bullish"))
-            elif df['Bearish_Engulfing'].iloc[-1]: score -= 1; signals.append(("🔴 Bearish Engulfing", "Warnung", "bearish"))
-
-            # CHECK 9: S/R proximity
-            dist_sup = abs(last_price - nearest_support) / last_price * 100
-            dist_res = abs(nearest_resistance - last_price) / last_price * 100
-            if dist_res > dist_sup * 2: score += 2; signals.append(("🎯 Viel Platz nach oben", f"R:{dist_res:.1f}% S:{dist_sup:.1f}%", "bullish"))
-            elif dist_sup > dist_res * 2: score -= 1; signals.append(("⚠️ Wenig Platz oben", f"R:{dist_res:.1f}%", "bearish"))
-
-            # CHECK 10: Stochastic
-            stk = df['Stoch_K'].iloc[-1] if not pd.isna(df['Stoch_K'].iloc[-1]) else 50
-            if stk < 20: score += 1; signals.append(("📉 Stochastik überverkauft", f"%K={stk:.0f}", "bullish"))
-            elif stk > 80: score -= 1; signals.append(("📈 Stochastik überkauft", f"%K={stk:.0f}", "bearish"))
-
-            # Decision
-            regime = "TRENDING" if last_adx > 25 else "RANGING" if last_adx < 20 else "TRANSITIONING"
-            is_bullish = score >= 4
-            is_bearish = score <= -4
-
-            if is_bullish:
-                direction, d_emoji, d_color = "LONG", "🟢", "#00e676"
-                entry_low = min(last_ema1, last_ema2) if regime == "TRENDING" else max(nearest_support, last_bb_lower)
-                entry_high = last_price if regime == "TRENDING" else min(last_price, last_bb_mid)
-                if entry_high <= entry_low: entry_low, entry_high = last_price - atr_now*0.5, last_price
-                sl_level = min(nearest_support - atr_now*0.5, entry_low - atr_now*1.5)
-                target_1, target_2 = nearest_resistance, second_resistance
-                target_3 = max(target_2 + atr_now*1.5, last_price + atr_now*4)
-            elif is_bearish:
-                direction, d_emoji, d_color = "SHORT", "🔴", "#ff1744"
-                entry_low = last_price if regime == "TRENDING" else max(last_price, last_bb_mid)
-                entry_high = max(last_ema1, last_ema2) if regime == "TRENDING" else min(nearest_resistance, last_bb_upper)
-                if entry_high <= entry_low: entry_low, entry_high = last_price, last_price + atr_now*0.5
-                sl_level = max(nearest_resistance + atr_now*0.5, entry_high + atr_now*1.5)
-                target_1, target_2 = nearest_support, second_support
-                target_3 = min(target_2 - atr_now*1.5, last_price - atr_now*4)
-            else:
-                direction, d_emoji, d_color = "ABWARTEN", "🟡", "#ffea00"
-                entry_low, entry_high = nearest_support, nearest_support + atr_now*0.3
-                sl_level = nearest_support - atr_now*1.5
-                target_1, target_2 = nearest_resistance, second_resistance if second_resistance > nearest_resistance else nearest_resistance + atr_now*2
-                target_3 = target_2 + atr_now*1.5
-
-            score_label = "🟢 SEHR STARK" if score >= 8 else "🟢 STARK" if score >= 5 else "🟢 GUT" if score >= 4 else "🟡 NEUTRAL" if score >= 0 else "🔴 SCHWACH" if score >= -3 else "🔴 SEHR SCHWACH"
-            confidence = min(100, max(0, int((score / max_score) * 100)))
-
-            mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-            mc1.metric("Richtung", f"{d_emoji} {direction}")
-            mc2.metric("Score", f"{score}/{max_score}")
-            mc3.metric("Bewertung", score_label)
-            mc4.metric("Regime", f"{'📈 Trend' if regime=='TRENDING' else '↔️ Range' if regime=='RANGING' else '🔄 Übergang'}")
-            mc5.metric("Konfidenz", f"{confidence}%")
-
-            # Entry Zone chart
-            fig_ez = go.Figure()
-            pw = min(60, len(df))
-            pd_w = plot_df.iloc[-pw:]
-            fig_ez.add_trace(go.Candlestick(x=pd_w.index, open=pd_w['Open'], high=pd_w['High'], low=pd_w['Low'], close=pd_w['Close'],
-                name="Price", increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
-            df_w = df.iloc[-pw:]
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_1'], line=dict(color=ema1_col, width=1.2), name=f'EMA {ema1_len}'))
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_2'], line=dict(color=ema2_col, width=1.2), name=f'EMA {ema2_len}'))
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Upper'], line=dict(color='rgba(255,255,255,0.12)', width=1), showlegend=False))
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Lower'], line=dict(color='rgba(255,255,255,0.12)', width=1),
-                fill='tonexty', fillcolor='rgba(100,100,255,0.03)', showlegend=False))
-
-            for lvl in key_levels:
-                is_sup = lvl < last_price
-                cl = '#26a69a' if is_sup else '#ef5350'
-                fig_ez.add_hline(y=lvl, line_dash="dashdot", line_color=cl, line_width=1, opacity=0.6,
-                    annotation_text=f"{'S' if is_sup else 'R'} ${lvl:.2f}", annotation_position="left",
-                    annotation=dict(font=dict(color=cl, size=10)))
-
-            z_color = "rgba(0,230,118,0.15)" if direction=="LONG" else "rgba(255,23,68,0.12)" if direction=="SHORT" else "rgba(255,234,0,0.10)"
-            z_border = "#00e676" if direction=="LONG" else "#ff1744" if direction=="SHORT" else "#ffea00"
-            fig_ez.add_hrect(y0=entry_low, y1=entry_high, fillcolor=z_color, line_width=2, line_color=z_border, line_dash="dash",
-                annotation_text=f"🎯 ENTRY ${entry_low:.2f}–${entry_high:.2f}", annotation_position="top left",
-                annotation=dict(font=dict(color=z_border, size=12)))
-            fig_ez.add_hline(y=sl_level, line_dash="dash", line_color="#ff1744", line_width=2,
-                annotation_text=f"🛑 SL ${sl_level:.2f}", annotation_position="bottom left",
-                annotation=dict(font=dict(color="#ff1744", size=11)))
-            for idx_t, (tgt, tcol, tlbl) in enumerate([(target_1,"#00b0ff","Ziel 1"),(target_2,"#448aff","Ziel 2"),(target_3,"#7c4dff","Ziel 3")]):
-                fig_ez.add_hline(y=tgt, line_dash="dot", line_color=tcol, line_width=1.5,
-                    annotation_text=f"{'🎯' if idx_t==0 else '🏆' if idx_t==1 else '💎'} {tlbl}: ${tgt:.2f}",
-                    annotation_position="top right", annotation=dict(font=dict(color=tcol, size=10)))
-            fig_ez.add_hline(y=last_price, line_dash="solid", line_color="white", line_width=1.5,
-                annotation_text=f"◀ JETZT ${last_price:.2f}", annotation_position="right",
-                annotation=dict(font=dict(color="white", size=12, family="monospace")))
-            fig_ez.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=130, t=35, b=0),
-                paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False,
-                showlegend=True, legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
-                title=dict(text=f"Entry-Analyse: {st.session_state.tickers[0]} — {d_emoji} {direction} (Score {score}/{max_score})",
-                           font=dict(color=d_color, size=15)))
-            if interval in ['1d','1wk']: fig_ez.update_xaxes(rangebreaks=[dict(bounds=["sat","mon"])])
-            st.plotly_chart(fig_ez, use_container_width=True)
-
-            st.markdown("#### 📊 Signal-Konfluenz Details")
-            for sig_name, sig_desc, sig_type in signals:
-                render_signal_card(sig_name, sig_desc, sig_type)
-
-            # Risk/Reward
-            st.markdown("#### 💰 Risk / Reward Analyse")
-            entry_mid = (entry_low + entry_high) / 2
-            risk = abs(entry_mid - sl_level)
-            rr1 = abs(target_1 - entry_mid) / risk if risk > 0 else 0
-            rr2 = abs(target_2 - entry_mid) / risk if risk > 0 else 0
-            rr3 = abs(target_3 - entry_mid) / risk if risk > 0 else 0
-            rr_verdict = "✅ Akzeptabel" if rr1 >= 1.5 else "⚠️ Grenzwertig" if rr1 >= 1.0 else "❌ Zu riskant"
-            rc1, rc2, rc3, rc4 = st.columns(4)
-            rc1.metric("Risiko (→ SL)", f"${risk:.2f}")
-            rc2.metric("R:R Ziel 1", f"1:{rr1:.1f}")
-            rc3.metric("R:R Ziel 2", f"1:{rr2:.1f}")
-            rc4.metric("R:R Urteil", rr_verdict)
-
-            if direction != "ABWARTEN":
-                st.markdown("#### 📋 Trade-Plan")
-                st.markdown(f"""
-    | Parameter | Wert |
-    |---|---|
-    | **Richtung** | {d_emoji} {direction} |
-    | **Entry Zone** | ${entry_low:.2f} – ${entry_high:.2f} |
-    | **Stop-Loss** | ${sl_level:.2f} (Risiko: ${risk:.2f}/Aktie) |
-    | **Ziel 1** | ${target_1:.2f} (R:R 1:{rr1:.1f}) |
-    | **Ziel 2** | ${target_2:.2f} (R:R 1:{rr2:.1f}) |
-    | **Ziel 3** | ${target_3:.2f} (R:R 1:{rr3:.1f}) |
-    | **Regime** | {regime} (ADX: {last_adx:.0f}) |
-    | **Konfidenz** | {confidence}% ({score}/{max_score} Signale) |
-    """)
-            else:
-                st.warning("🟡 **Kein klares Signal.** Abwarten bis Score ≥4 oder ≤-4.")
-            st.caption("⚠️ Dies ist keine Anlageberatung. Immer eigene Analyse durchführen!")
+| Parameter | Wert |
+|---|---|
+| **Richtung** | {d_emoji} {direction} |
+| **Entry Zone** | ${entry_low:.2f} – ${entry_high:.2f} |
+| **Stop-Loss** | ${sl_level:.2f} (Risiko: ${risk:.2f}/Aktie) |
+| **Ziel 1** | ${target_1:.2f} (R:R 1:{rr1:.1f}) |
+| **Ziel 2** | ${target_2:.2f} (R:R 1:{rr2:.1f}) |
+| **Ziel 3** | ${target_3:.2f} (R:R 1:{rr3:.1f}) |
+| **Regime** | {regime} (ADX: {last_adx:.0f}) |
+| **Konfidenz** | {confidence}% ({score}/{max_score} Signale) |
+""")
+        else:
+            st.warning("🟡 **Kein klares Signal.** Abwarten bis Score ≥4 oder ≤-4.")
+        st.caption("⚠️ Dies ist keine Anlageberatung. Immer eigene Analyse durchführen!")
 
 
     # ======= CHART: FUNDAMENTAL SUBTAB =======
@@ -1328,13 +1327,6 @@ with tab_portfolio:
             trade_price = cC.number_input("Entry Price", value=float(current_price))
             if st.button("Buy / Add Position"):
                 new_pos = pd.DataFrame([{"Symbol": trade_sym, "Shares": trade_shares, "EntryPrice": trade_price}])
-                # Persist to DB
-                db.add_position({
-                    'symbol': trade_sym, 'direction': 'BUY',
-                    'entry_price': trade_price, 'sl': trade_price * 0.95,
-                    'tp': trade_price * 1.10, 'shares': trade_shares,
-                    'open_date': datetime.datetime.now().isoformat()
-                })
                 st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_pos], ignore_index=True)
                 st.rerun()
         st.markdown("#### 📅 Monthly Seasonality (10Y)")
