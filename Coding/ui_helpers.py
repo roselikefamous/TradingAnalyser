@@ -166,9 +166,12 @@ def render_backtest_stats(stats: dict, title="📊 Backtest-Ergebnisse"):
     c1.metric("Signale", stats['total_signals'])
     c2.metric("Exits", stats.get('total_exits', stats.get('short_count', 0) + stats.get('long_count', 0)))
 
-    win_rate = stats.get('win_rate', 0)
-    wr_color = "normal" if win_rate >= 50 else "inverse"
-    c3.metric("Win Rate", f"{win_rate:.0f}%")
+    win_rate = stats.get('win_rate')
+    if win_rate is not None:
+        c3.metric("Win Rate", f"{win_rate:.0f}%")
+    else:
+        c3.metric("Win Rate", "N/A")
+
     c4.metric("Ø R:R", f"1:{stats.get('avg_rr', 0):.1f}")
 
     if 'net_pnl_pct' in stats:

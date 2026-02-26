@@ -48,7 +48,7 @@ def run_backtest(
     trades: list[Trade] = []
     risk_snaps = []
     eq_rows = []
-    open_pos = None
+    active_positions = []
 
     for i, (ts, row) in enumerate(df.iterrows()):
         ts = pd.Timestamp(ts)
@@ -57,15 +57,20 @@ def run_backtest(
         high = float(row["High"])
         low = float(row["Low"])
 
-        gross_exposure = 0.0
-        if open_pos is not None:
-            gross_exposure = abs(open_pos["qty"] * close)
-        equity = cash + (open_pos["qty"] * close if open_pos is not None else 0.0)
+        gross_exposure = sum(abs(p["qty"] * close) for p in active_positions)
+        unrealized_value = 0.0
+        for p in active_positions:
+            if p["side"] == "LONG":
+                unrealized_value += p["qty"] * close
+            else:
+                unrealized_value += p["qty"] * p["entry_price"] + (p["entry_price"] - close) * p["qty"]
+        equity = cash + unrealized_value
 
-        if open_pos is not None:
-            side = open_pos["side"]
-            tp = open_pos["tp"]
-            sl = open_pos["sl"]
+        closed_positions = []
+        for p in list(active_positions):
+            side = p["side"]
+            tp = p["tp"]
+            sl = p["sl"]
             exit_price = None
             reason = None
 
@@ -88,72 +93,88 @@ def run_backtest(
             elif hit_tp:
                 exit_price = tp
                 reason = "TP"
-            elif cfg.max_holding_bars is not None and (i - open_pos["entry_i"]) >= cfg.max_holding_bars:
+            elif cfg.max_holding_bars is not None and (i - p["entry_i"]) >= cfg.max_holding_bars:
                 exit_price = close
                 reason = "TIME"
 
             if exit_price is not None:
                 slippage = cfg.slippage_bps / 10000
                 exec_price = exit_price * (1 - slippage if side == "LONG" else 1 + slippage)
-                fee = abs(exec_price * open_pos["qty"]) * (cfg.fee_bps / 10000)
-                cash += open_pos["qty"] * exec_price - fee
-                gross_pnl = (exec_price - open_pos["entry_price"]) * open_pos["qty"]
-                net_pnl = gross_pnl - open_pos["entry_fee"] - fee
+                fee = abs(exec_price * p["qty"]) * (cfg.fee_bps / 10000)
+                
+                if side == "LONG":
+                    cash += p["qty"] * exec_price - fee
+                    gross_pnl = (exec_price - p["entry_price"]) * p["qty"]
+                else:
+                    gross_pnl = (p["entry_price"] - exec_price) * p["qty"]
+                    cash += p["qty"] * p["entry_price"] + gross_pnl - fee
+                    
+                net_pnl = gross_pnl - p["entry_fee"] - fee
                 trade = Trade(
-                    symbol=open_pos["symbol"],
+                    symbol=p["symbol"],
                     side=side,
-                    entry_date=open_pos["entry_date"],
+                    entry_date=p["entry_date"],
                     exit_date=ts,
-                    quantity=float(open_pos["qty"]),
-                    entry_price=float(open_pos["entry_price"]),
+                    quantity=float(p["qty"]),
+                    entry_price=float(p["entry_price"]),
                     exit_price=float(exec_price),
                     gross_pnl=float(gross_pnl),
                     net_pnl=float(net_pnl),
-                    fee_total=float(open_pos["entry_fee"] + fee),
+                    fee_total=float(p["entry_fee"] + fee),
                     exit_reason=str(reason),
                 )
                 trades.append(trade)
-                equity = cash
+                equity = cash # update intermediate equity
                 risk.on_realized_pnl(ts, net_pnl, equity)
-                open_pos = None
-                gross_exposure = 0.0
+                closed_positions.append(p)
 
-        if open_pos is None:
-            for sig in signals_by_date.get(ts, []):
-                side = sig.side.upper()
-                notional_target = cash * cfg.default_notional_pct
-                entry_slippage = cfg.slippage_bps / 10000
-                entry_price = open_px * (1 + entry_slippage if side == "LONG" else 1 - entry_slippage)
-                qty = sig.quantity if sig.quantity is not None else (notional_target / entry_price if entry_price > 0 else 0.0)
-                notional = abs(qty * entry_price)
+        for p in closed_positions:
+            active_positions.remove(p)
+            
+        gross_exposure = sum(abs(p["qty"] * close) for p in active_positions)
 
-                ok, _ = risk.can_open_trade(
-                    date=ts,
-                    equity=equity,
-                    proposed_notional=notional,
-                    gross_exposure=gross_exposure,
-                    open_positions=1 if open_pos is not None else 0,
-                )
-                if not ok or qty <= 0:
-                    continue
+        for sig in signals_by_date.get(ts, []):
+            side = sig.side.upper()
+            notional_target = cash * cfg.default_notional_pct
+            entry_slippage = cfg.slippage_bps / 10000
+            entry_price = open_px * (1 + entry_slippage if side == "LONG" else 1 - entry_slippage)
+            qty = sig.quantity if sig.quantity is not None else (notional_target / entry_price if entry_price > 0 else 0.0)
+            notional = abs(qty * entry_price)
 
-                fee = notional * (cfg.fee_bps / 10000)
-                cash -= (qty * entry_price + fee)
-                open_pos = {
-                    "symbol": sig.symbol,
-                    "side": side,
-                    "qty": float(qty),
-                    "entry_price": float(entry_price),
-                    "entry_fee": float(fee),
-                    "entry_date": ts,
-                    "entry_i": i,
-                    "tp": float(sig.tp),
-                    "sl": float(sig.sl),
-                }
-                gross_exposure = abs(open_pos["qty"] * close)
-                break
+            ok, _ = risk.can_open_trade(
+                date=ts,
+                equity=equity,
+                proposed_notional=notional,
+                gross_exposure=gross_exposure,
+                open_positions=len(active_positions),
+            )
+            if not ok or qty <= 0:
+                continue
 
-        equity = cash + (open_pos["qty"] * close if open_pos is not None else 0.0)
+            fee = notional * (cfg.fee_bps / 10000)
+            cash -= (qty * entry_price + fee)
+            new_pos = {
+                "symbol": sig.symbol,
+                "side": side,
+                "qty": float(qty),
+                "entry_price": float(entry_price),
+                "entry_fee": float(fee),
+                "entry_date": ts,
+                "entry_i": i,
+                "tp": float(sig.tp),
+                "sl": float(sig.sl),
+            }
+            active_positions.append(new_pos)
+            gross_exposure += abs(new_pos["qty"] * close)
+
+        unrealized_value = 0.0
+        for p in active_positions:
+            if p["side"] == "LONG":
+                unrealized_value += p["qty"] * close
+            else:
+                unrealized_value += p["qty"] * p["entry_price"] + (p["entry_price"] - close) * p["qty"]
+        equity = cash + unrealized_value
+        
         eq_rows.append({"Date": ts, "Equity": equity, "Cash": cash})
         risk_snaps.append(
             risk.snapshot(
@@ -161,32 +182,38 @@ def run_backtest(
                 equity=equity,
                 cash=cash,
                 gross_exposure=gross_exposure,
-                open_positions=1 if open_pos is not None else 0,
+                open_positions=len(active_positions),
             )
         )
 
-    if open_pos is not None:
-        ts = pd.Timestamp(df.index[-1])
-        close = float(df["Close"].iloc[-1])
-        side = open_pos["side"]
+    ts = pd.Timestamp(df.index[-1])
+    close = float(df["Close"].iloc[-1])
+    for p in active_positions:
+        side = p["side"]
         slippage = cfg.slippage_bps / 10000
         exec_price = close * (1 - slippage if side == "LONG" else 1 + slippage)
-        fee = abs(exec_price * open_pos["qty"]) * (cfg.fee_bps / 10000)
-        cash += open_pos["qty"] * exec_price - fee
-        gross_pnl = (exec_price - open_pos["entry_price"]) * open_pos["qty"]
-        net_pnl = gross_pnl - open_pos["entry_fee"] - fee
+        fee = abs(exec_price * p["qty"]) * (cfg.fee_bps / 10000)
+        
+        if side == "LONG":
+            cash += p["qty"] * exec_price - fee
+            gross_pnl = (exec_price - p["entry_price"]) * p["qty"]
+        else:
+            gross_pnl = (p["entry_price"] - exec_price) * p["qty"]
+            cash += p["qty"] * p["entry_price"] + gross_pnl - fee
+            
+        net_pnl = gross_pnl - p["entry_fee"] - fee
         trades.append(
             Trade(
-                symbol=open_pos["symbol"],
+                symbol=p["symbol"],
                 side=side,
-                entry_date=open_pos["entry_date"],
+                entry_date=p["entry_date"],
                 exit_date=ts,
-                quantity=float(open_pos["qty"]),
-                entry_price=float(open_pos["entry_price"]),
+                quantity=float(p["qty"]),
+                entry_price=float(p["entry_price"]),
                 exit_price=float(exec_price),
                 gross_pnl=float(gross_pnl),
                 net_pnl=float(net_pnl),
-                fee_total=float(open_pos["entry_fee"] + fee),
+                fee_total=float(p["entry_fee"] + fee),
                 exit_reason="EOD",
             )
         )

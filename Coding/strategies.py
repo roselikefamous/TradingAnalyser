@@ -601,5 +601,5 @@ def _calc_backtest_stats_mixed(shorts, longs, df_s, fee_bps=5.0, slippage_bps=3.
         'short_count': len(shorts),
         'long_count': len(longs),
         'avg_rr': np.mean(all_rr) if all_rr else 0,
-        'win_rate': 0,  # Can't compute without exits, show as theoretical
+        'win_rate': None,  # Can't compute without exits, show as theoretical
     }
