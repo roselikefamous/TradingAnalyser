@@ -1,6 +1,10 @@
 import pandas as pd
 
-from trading_terminal.scanner.contracts import ScannerDirection, ScannerSignal
+from trading_terminal.scanner.contracts import (
+    SCANNER_SCHEMA_COLUMNS,
+    ScannerDirection,
+    ScannerSignal,
+)
 from trading_terminal.scanner.service import scan_all_assets_df, score_asset_contract
 
 
@@ -63,17 +67,4 @@ def test_scan_all_assets_df_normalizes_schema(monkeypatch):
     )
     out = scan_all_assets_df()
     assert list(out["Symbol"]) == ["AAPL", "MSFT"]
-    required_cols = {
-        "Symbol",
-        "Name",
-        "Score",
-        "Direction",
-        "DirectionKey",
-        "Kurs",
-        "Entry",
-        "SL",
-        "TP",
-        "Signale",
-    }
-    assert required_cols.issubset(set(out.columns))
-
+    assert list(out.columns) == SCANNER_SCHEMA_COLUMNS

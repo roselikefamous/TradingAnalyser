@@ -6,6 +6,7 @@ from ui_helpers import (
     render_signal_card,
     render_strategy_rules,
 )
+from .market_tab import render_market_scanner_simulation_section, render_market_signals_section
 
 __all__ = [
     "INDICATOR_GUIDE",
@@ -14,5 +15,6 @@ __all__ = [
     "render_equity_curve",
     "render_signal_card",
     "render_strategy_rules",
+    "render_market_signals_section",
+    "render_market_scanner_simulation_section",
 ]
-
