@@ -393,6 +393,7 @@ def render_market_scanner_simulation_section(now: datetime.datetime) -> None:
 
     with sb3:
         if st.button("🗑️ Reset", use_container_width=True):
+            db.reset_portfolio()
             st.session_state.sim_state = new_simulation_state()
             st.rerun()
 

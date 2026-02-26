@@ -223,7 +223,10 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         )
         wf_train = wf_col2.number_input("Train-Bars", min_value=100, max_value=2000, value=252, step=21)
         wf_test = wf_col3.number_input("Test-Bars", min_value=20, max_value=500, value=63, step=7)
-        wf_step = st.number_input("Step-Bars", min_value=20, max_value=500, value=63, step=7)
+        
+        wf_col4, wf_col5 = st.columns(2)
+        wf_step = wf_col4.number_input("Step-Bars", min_value=20, max_value=500, value=63, step=7)
+        wf_use_sim = wf_col5.checkbox("Nutze PortfolioSimEngine (Realistic)", value=True, help="Nutzt die event-driven Engine mit Kosten & Slippage anstelle der Vector-Logik.")
 
         if st.button("▶ Walk-Forward starten", use_container_width=True):
             try:
@@ -233,6 +236,7 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
                     train_size=int(wf_train),
                     test_size=int(wf_test),
                     step_size=int(wf_step),
+                    use_portfolio_sim=wf_use_sim,
                 )
                 st.success(f"{summary.folds} Folds berechnet ({summary.strategy}).")
                 s1, s2, s3, s4 = st.columns(4)

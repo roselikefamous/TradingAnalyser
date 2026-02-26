@@ -87,6 +87,7 @@ def run_walk_forward_backtest(
     train_size: int = 252,
     test_size: int = 63,
     step_size: int = 63,
+    use_portfolio_sim: bool = False,
 ) -> tuple[list[WalkForwardFoldResult], WalkForwardSummary]:
     """Run rolling walk-forward validation on out-of-sample windows.
 
@@ -125,21 +126,64 @@ def run_walk_forward_backtest(
         train_out = runner(train_df)
         test_out = runner(test_df)
 
-        if strategy_name in {"bollinger_scalping", "fibonacci_swing"}:
-            train_entries = train_out[0] if train_out else []
-            test_entries = test_out[0] if test_out else []
-            test_exits = test_out[1] if len(test_out) > 1 else []
-            test_backtest = test_out[2] if len(test_out) > 2 else {}
-        else:
-            train_shorts = train_out[0] if train_out else []
-            train_longs = train_out[1] if len(train_out) > 1 else []
-            train_entries = train_shorts + train_longs
+        if use_portfolio_sim:
+            from trading_terminal.backtesting.portfolio import PortfolioSimEngine
+            from trading_terminal.contracts import StrategySignal
+            
+            if strategy_name in {"bollinger_scalping", "fibonacci_swing"}:
+                train_entries = train_out[0] if train_out else []
+                test_entries = test_out[0] if test_out else []
+            else:
+                train_shorts = train_out[0] if train_out else []
+                train_longs = train_out[1] if len(train_out) > 1 else []
+                train_entries = train_shorts + train_longs
 
-            test_shorts = test_out[0] if test_out else []
-            test_longs = test_out[1] if len(test_out) > 1 else []
-            test_entries = test_shorts + test_longs
-            test_exits = _simulate_exits_for_signals(test_df, test_entries)
-            test_backtest = _calc_simulated_backtest_stats(test_entries, test_exits)
+                test_shorts = test_out[0] if test_out else []
+                test_longs = test_out[1] if len(test_out) > 1 else []
+                test_entries = test_shorts + test_longs
+
+            sim_signals = [StrategySignal.from_legacy(sig) for sig in test_entries]
+            sim = PortfolioSimEngine(initial_capital=10000.0)
+            res = sim.run(test_df, sim_signals)
+            
+            test_exits = res.trades
+            total_trades = len(res.trades)
+            wins = sum(1 for t in res.trades if t.net_pnl > 0)
+            test_win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+            test_net_pnl_pct = ((res.final_equity - sim.initial_capital) / sim.initial_capital) * 100
+            
+            # Simple average RR calc based on risk approx
+            rr_vals = []
+            for t in res.trades:
+                sig_match = next((s for s in sim_signals if s.date == t.entry_date and s.side == t.side), None)
+                if sig_match:
+                    risk = abs(t.entry_price - sig_match.sl)
+                    if risk > 0:
+                        rr_vals.append(t.net_pnl / (risk * t.quantity))
+            test_avg_rr = float(np.mean(rr_vals)) if rr_vals else 0.0
+
+            test_backtest = {
+                "win_rate": test_win_rate,
+                "avg_rr": test_avg_rr,
+                "net_pnl_pct": test_net_pnl_pct
+            }
+
+        else:
+            if strategy_name in {"bollinger_scalping", "fibonacci_swing"}:
+                train_entries = train_out[0] if train_out else []
+                test_entries = test_out[0] if test_out else []
+                test_exits = test_out[1] if len(test_out) > 1 else []
+                test_backtest = test_out[2] if len(test_out) > 2 else {}
+            else:
+                train_shorts = train_out[0] if train_out else []
+                train_longs = train_out[1] if len(train_out) > 1 else []
+                train_entries = train_shorts + train_longs
+
+                test_shorts = test_out[0] if test_out else []
+                test_longs = test_out[1] if len(test_out) > 1 else []
+                test_entries = test_shorts + test_longs
+                test_exits = _simulate_exits_for_signals(test_df, test_entries)
+                test_backtest = _calc_simulated_backtest_stats(test_entries, test_exits)
 
         fold_results.append(
             WalkForwardFoldResult(
