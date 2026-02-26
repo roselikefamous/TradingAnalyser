@@ -155,9 +155,11 @@ def render_market_scanner_simulation_section(now: datetime.datetime) -> None:
 
     scan_col1, scan_col2, scan_col3 = st.columns([2, 1, 1])
     with scan_col1:
-        if st.button("🚀 Jetzt alle Märkte scannen", type="primary", use_container_width=True):
+        def start_scanner_callback():
             st.session_state['scanner_running'] = True
             st.session_state['scanner_results'] = None
+            
+        st.button("🚀 Jetzt alle Märkte scannen", type="primary", use_container_width=True, on_click=start_scanner_callback)
 
     with scan_col2:
         direction_filter = st.selectbox("Filter", ["Alle", "🟢 NUR KAUFEN", "🟡 NUR NEUTRAL", "🔴 NUR VORSICHT"], label_visibility="collapsed")

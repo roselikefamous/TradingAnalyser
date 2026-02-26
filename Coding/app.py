@@ -110,7 +110,6 @@ if st.session_state.get('scanner_running'):
     st.session_state['scanner_running'] = False
     import time; time.sleep(1) # let user see 100%
     _prog_container.empty()
-    st.rerun()
 
 # ================== SIDEBAR ==================
 with st.sidebar:
@@ -1100,20 +1099,24 @@ with tab_portfolio:
         with st.container(border=True):
             st.markdown("#### 📝 Manueller Trade")
             cA, cB = st.columns(2)
-            trade_sym = cA.selectbox("Asset", st.session_state.watchlist, key="trade_sym")
-            trade_shares = cB.number_input("Shares", min_value=1, value=10)
-            trade_price = st.number_input("Einstiegspreis ($)", value=float(current_price))
-            if st.button("🛒 Position Hinzufügen", use_container_width=True, type="primary"):
-                new_pos = pd.DataFrame([{"Symbol": trade_sym, "Shares": trade_shares, "EntryPrice": trade_price}])
+            def add_manual_trade():
+                sym = st.session_state.trade_sym
+                shares = st.session_state.trade_shares_input
+                price = st.session_state.trade_price_input
+                new_pos = pd.DataFrame([{"Symbol": sym, "Shares": shares, "EntryPrice": price}])
                 import datetime
                 db.add_position({
-                    'symbol': trade_sym, 'direction': 'BUY',
-                    'entry_price': trade_price, 'sl': trade_price * 0.95,
-                    'tp': trade_price * 1.10, 'shares': trade_shares,
+                    'symbol': sym, 'direction': 'BUY',
+                    'entry_price': price, 'sl': price * 0.95,
+                    'tp': price * 1.10, 'shares': shares,
                     'open_date': datetime.datetime.now().isoformat()
                 })
                 st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_pos], ignore_index=True)
-                st.rerun()
+
+            trade_sym = cA.selectbox("Asset", st.session_state.watchlist, key="trade_sym")
+            trade_shares = cB.number_input("Shares", min_value=1, value=10, key="trade_shares_input")
+            trade_price = st.number_input("Einstiegspreis ($)", value=float(current_price), key="trade_price_input")
+            st.button("🛒 Position Hinzufügen", use_container_width=True, type="primary", on_click=add_manual_trade)
 
         with st.expander("⚙️ Erweiterte Tools", expanded=True):
             st.radio("Base Currency", ["USD", "EUR", "GBP"], horizontal=True, key="base_curr")
