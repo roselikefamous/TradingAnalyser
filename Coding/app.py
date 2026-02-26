@@ -1899,7 +1899,7 @@ with tab_ai:
 # ======= AI & STRATEGIEN: AI & ML (continued in same tab) =======
 with tab_ai:
     st.markdown("### 🤖 AI & Machine Learning Suite")
-    ai_pick = st.radio("AI-Modul:", ["🧠 Pattern Scanner", "📊 Regime Detection", "🎯 Auto S/R", "📈 Forecast", "📋 Risk Profiler", "📄 AI Report"], horizontal=True)
+    ai_pick = st.radio("AI-Modul:", ["🧠 Pattern Scanner", "📊 Regime Detection", "🎯 Auto S/R", "📈 Forecast", "📋 Risk Profiler", "📄 AI Report", "📚 Wissens-DB"], horizontal=True)
     returns_ai = df['Daily_Return'].dropna()
 
     if "Pattern" in ai_pick:
@@ -1982,6 +1982,47 @@ with tab_ai:
         else: pf, assets = "🔥 Aggressiv", ["BTC-USD", "NVDA", "ARKK"]
         st.success(f"**Profil:** {pf} (Score: {rs:.1f}/10)")
         for a in assets: st.markdown(f"- {a}")
+
+    elif "Wissens-DB" in ai_pick:
+        st.markdown("#### 📚 Knowledge Base (KI Regelextraktion)")
+        st.write("Füttere die Trading-Engine mit Regeln aus Büchern oder PDFs.")
+        
+        with st.form("kb_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                book_title = st.text_input("Quelle / Buchtitel", placeholder="z.B. Trading für Anfänger")
+            with col2:
+                rule_name = st.text_input("Strategie-Name", placeholder="z.B. RSI Bounce")
+                
+            raw_text = st.text_area("Regeltext / Buchauszug", height=150, placeholder="Textextrakt... (z.B. Kaufe wenn RSI unter 30 fällt)")
+            submit = st.form_submit_button("🧠 Regeln extrahieren & Speichern")
+            
+            if submit and raw_text and rule_name:
+                try:
+                    import knowledge_base as kb
+                    import database as db
+                    import json
+                    
+                    # Mock RAG extraction
+                    extracted_logic = kb.parse_book_to_rules(raw_text)
+                    
+                    # Save to database
+                    db.add_strategy(name=rule_name, source_book=book_title, logic_json=json.dumps(extracted_logic), base_weight=1.0)
+                    st.success(f"Strategie '{rule_name}' erfolgreich extrahiert und als ID in der Datenbank gespeichert!")
+                    st.json(extracted_logic)
+                except Exception as e:
+                    st.error(f"Fehler bei der Regelextraktion: {e}")
+                
+        st.markdown("---")
+        st.markdown("##### 🗄️ Aktive Strategien in der Datenbank")
+        import database as db
+        import pandas as pd
+        strats = db.get_all_strategies()
+        if strats:
+            df_strats = pd.DataFrame(strats)
+            st.dataframe(df_strats, use_container_width=True, hide_index=True)
+        else:
+            st.info("Noch keine Strategien gespeichert.")
 
     elif "Report" in ai_pick:
         st.markdown("#### 📄 Executive AI Report")
