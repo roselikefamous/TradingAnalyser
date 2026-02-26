@@ -12,6 +12,7 @@ import pandas as pd
 import yfinance as yf
 
 from indicators import calc_bollinger_bands, calc_ema, calc_stochastic, apply_core_indicators
+import database as db
 
 
 # ═══════════════════════════════════════════════════════════
@@ -27,18 +28,74 @@ MAX_INVEST = 0.20              # max. 20% of capital per single position
 # DEFAULT STATE
 # ═══════════════════════════════════════════════════════════
 
-def new_simulation_state() -> Dict[str, Any]:
-    """Return a fresh simulation state dict."""
+def load_simulation_state() -> Dict[str, Any]:
+    """Load simulation state from database, reconstructing cash and equity."""
+    open_pos = db.get_open_positions()
+    closed_pos = db.get_closed_positions()
+    
+    sim_open = []
+    invested = 0.0
+    for p in open_pos:
+        entry = p['entry_price']
+        shares = p['shares']
+        invest_eur = entry * shares
+        invested += invest_eur
+        sim_open.append({
+            "db_id": p['db_id'],
+            "symbol": p['symbol'],
+            "name": p['symbol'],
+            "entry": entry,
+            "sl": p['sl'],
+            "tp": p['tp'],
+            "shares": shares,
+            "invest_eur": round(invest_eur, 2),
+            "open_date": p['open_date'],
+            "strategy": "DB Load",
+            "score": 0
+        })
+        
+    sim_closed = []
+    total_pnl = 0.0
+    for p in closed_pos:
+        entry = p['entry_price']
+        exit_price = p['close_price']
+        shares = p['shares']
+        pnl = p['pnl']
+        if pd.isna(pnl) or pnl is None:
+            pnl = 0.0
+        total_pnl += pnl
+        
+        hit = "TP" if exit_price and exit_price >= entry else "SL"
+        sim_closed.append({
+            "symbol": p['symbol'],
+            "name": p['symbol'],
+            "entry": entry,
+            "exit_price": round(exit_price, 4) if exit_price else entry,
+            "sl": 0, "tp": 0, "shares": shares,
+            "exit_date": p['close_date'],
+            "result": hit,
+            "pnl_eur": round(pnl, 2),
+            "pnl_pct": round(((exit_price - entry) / entry * 100) if exit_price and entry > 0 else 0, 2),
+            "strategy": "DB Load",
+        })
+        
+    start_capital = STARTING_CAPITAL
+    cash = start_capital - invested + total_pnl
+    
     return {
-        "cash": STARTING_CAPITAL,
-        "start_capital": STARTING_CAPITAL,
-        "positions": [],      # list of open position dicts
-        "closed_trades": [],  # list of closed trade dicts
-        "equity_history": [   # list of {date, equity}
-            {"date": datetime.date.today().isoformat(), "equity": STARTING_CAPITAL}
+        "cash": round(cash, 2),
+        "start_capital": start_capital,
+        "positions": sim_open,
+        "closed_trades": sim_closed,
+        "equity_history": [
+            {"date": datetime.date.today().isoformat(), "equity": round(cash + invested, 2)}
         ],
-        "last_updated": None,
+        "last_updated": datetime.datetime.now().isoformat(),
     }
+
+def new_simulation_state() -> Dict[str, Any]:
+    """Return a simulation state dict, loaded from DB."""
+    return load_simulation_state()
 
 
 # ═══════════════════════════════════════════════════════════
@@ -171,7 +228,20 @@ def open_positions_from_scanner(
         state["cash"] -= invest_eur
         opened += 1
 
+        # Persist to DB
+        db_pos = {
+            'symbol': symbol,
+            'direction': 'BUY',
+            'entry_price': round(entry, 4),
+            'sl': round(sl, 4),
+            'tp': round(tp, 4),
+            'shares': shares,
+            'open_date': datetime.date.today().isoformat()
+        }
+        db_id = db.add_position(db_pos)
+
         position = {
+            "db_id":        db_id,
             "symbol":       symbol,
             "name":         row.get("Name", symbol),
             "entry":        round(entry, 4),
@@ -268,6 +338,13 @@ def update_portfolio(state: Dict[str, Any], progress_callback=None) -> Tuple[Dic
             pnl_pct = ((hit_price - entry) / entry) * 100
 
             state["cash"] += pos["invest_eur"] + pnl_eur  # return capital + P&L
+
+            # Close in DB
+            if "db_id" in pos:
+                db.close_position(pos["db_id"], float(hit_price), hit_date, float(pnl_eur))
+            else:
+                # Fallback if manual trade didn't set db_id initially, but it should.
+                print(f"Warning: db_id missing for {pos['symbol']}. Skip DB close.")
 
             closed_trade = {**pos,
                 "exit_price": round(hit_price, 4),

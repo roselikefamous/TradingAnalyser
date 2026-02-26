@@ -176,3 +176,10 @@ def close_position(db_id: int, close_price: float, close_date: str, pnl: float):
     conn.commit()
     conn.close()
 
+def reset_portfolio():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("DELETE FROM portfolio")
+    conn.commit()
+    conn.close()
+

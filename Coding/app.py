@@ -364,6 +364,17 @@ with tab_home:
     _stats_h = get_simulation_stats(_sim_h)
     _wr_h = _stats_h.get('win_rate', 0) if _stats_h.get('total_trades', 0) > 0 else None
 
+    import streamlit.components.v1 as components
+    
+    st.markdown("### 🔴 Live Market (WebSocket)")
+    try:
+        with open("components/live_ticker.html", "r") as f:
+            live_ticker_html = f.read()
+        components.html(live_ticker_html, height=130)
+    except FileNotFoundError:
+        st.warning("components/live_ticker.html not found.")
+
+    st.markdown("### 📊 Portfolio & Stats")
     hm1, hm2, hm3, hm4 = st.columns(4)
     hm1.metric(
         "💰 Virtuelles Depot",

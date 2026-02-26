@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Market Ticker</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: #FAFAFA;
+            overflow: hidden;
+        }
+        
+        .ticker-container {
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 15px;
+            overflow-x: auto;
+            padding: 10px;
+            scroll-behavior: smooth;
+        }
+
+        .ticker-container::-webkit-scrollbar {
+            height: 4px;
+        }
+        .ticker-container::-webkit-scrollbar-thumb {
+            background-color: rgba(255,255,255,0.2);
+            border-radius: 4px;
+        }
+
+        .ticker-card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 15px 20px;
+            min-width: 140px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .ticker-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.6);
+        }
+
+        .symbol {
+            font-size: 14px;
+            font-weight: 600;
+            color: #94A3B8;
+            margin-bottom: 5px;
+            letter-spacing: 0.5px;
+        }
+
+        .price {
+            font-size: 22px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            transition: color 0.15s ease-out, text-shadow 0.15s ease-out;
+        }
+
+        /* Flash Animation Classes */
+        .flash-up {
+            color: #00e676;
+            text-shadow: 0 0 10px rgba(0, 230, 118, 0.8);
+        }
+
+        .flash-down {
+            color: #ff1744;
+            text-shadow: 0 0 10px rgba(255, 23, 68, 0.8);
+        }
+        
+        .change-pill {
+            margin-top: 8px;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-weight: 600;
+            display: inline-block;
+        }
+        .change-up { background: rgba(0,230,118,0.15); color: #00e676; }
+        .change-down { background: rgba(255,23,68,0.15); color: #ff1744; }
+
+    </style>
+</head>
+<body>
+
+<div class="ticker-container" id="tickerContainer">
+    <!-- Cards will be injected here by JS -->
+</div>
+
+<script>
+    // Configuration: Binance Symbols. 
+    // They must be lowercase for the stream.
+    const symbols = [
+        { display: "BTC-USD", stream: "btcusdt" },
+        { display: "ETH-USD", stream: "ethusdt" },
+        { display: "SOL-USD", stream: "solusdt" },
+        { display: "XRP-USD", stream: "xrpusdt" },
+        { display: "DOGE-USD", stream: "dogeusdt" }
+    ];
+
+    const container = document.getElementById("tickerContainer");
+    const priceElements = {};
+    const changeElements = {};
+    const previousPrices = {};
+    const dailyOpenPrices = {}; // To calculate 24h % change locally. Will be populated by 24h ticker stream
+
+    // Initialize UI Cards
+    symbols.forEach(sym => {
+        const card = document.createElement("div");
+        card.className = "ticker-card";
+        
+        card.innerHTML = `
+            <div class="symbol">${sym.display}</div>
+            <div class="price" id="price-${sym.stream}">---</div>
+            <div class="change-pill" id="change-${sym.stream}">0.00%</div>
+        `;
+        
+        container.appendChild(card);
+        priceElements[sym.stream] = document.getElementById(`price-${sym.stream}`);
+        changeElements[sym.stream] = document.getElementById(`change-${sym.stream}`);
+        previousPrices[sym.stream] = null;
+    });
+
+    // Format currency
+    function formatPrice(val) {
+        if (val >= 1000) return "$" + val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        if (val >= 1) return "$" + val.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+        return "$" + val.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 6 });
+    }
+
+    // Connect to multi-stream WebSocket for Trades (@trade) and 24h Ticker (@ticker)
+    const streams = symbols.map(s => `${s.stream}@trade`).join('/');
+    const tickerStreams = symbols.map(s => `${s.stream}@ticker`).join('/');
+    
+    let ws = null;
+
+    function connectWebSocket() {
+        const wsUrl = `wss://stream.binance.com:9443/stream?streams=${streams}/${tickerStreams}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log("WebSocket connected!");
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            const streamName = data.stream;
+            const payload = data.data;
+
+            // Handle 24hr Ticker updates (for the % change pill)
+            if (streamName.includes("@ticker")) {
+                const symStream = streamName.split('@')[0];
+                const pctChange = parseFloat(payload.P).toFixed(2);
+                
+                const el = changeElements[symStream];
+                if (el) {
+                    el.innerText = (pctChange >= 0 ? "+" : "") + pctChange + "%";
+                    el.className = "change-pill " + (pctChange >= 0 ? "change-up" : "change-down");
+                }
+            }
+            
+            // Handle Live Trade ticks (for the main flashing price)
+            if (streamName.includes("@trade")) {
+                const symStream = streamName.split('@')[0];
+                const newPrice = parseFloat(payload.p);
+                const prevPrice = previousPrices[symStream];
+                const el = priceElements[symStream];
+
+                if (el) {
+                    el.innerText = formatPrice(newPrice);
+                    
+                    if (prevPrice !== null && newPrice !== prevPrice) {
+                        // Flash animation
+                        el.classList.remove('flash-up', 'flash-down');
+                        
+                        // Force a reflow to restart CSS animation if we had a class-add technique,
+                        // but simple timeout class toggle works well enough.
+                        void el.offsetWidth; 
+
+                        if (newPrice > prevPrice) {
+                            el.classList.add('flash-up');
+                        } else {
+                            el.classList.add('flash-down');
+                        }
+                        
+                        // Remove flash class after 500ms
+                        setTimeout(() => {
+                            el.classList.remove('flash-up', 'flash-down');
+                            // Fallback to determine base color if no active flash
+                            el.style.color = (newPrice >= prevPrice) ? "#00e676" : "#ff1744"; 
+                        }, 500);
+                    } else if (prevPrice === null) {
+                       el.style.color = "#FAFAFA"; // initial
+                    }
+
+                    previousPrices[symStream] = newPrice;
+                }
+            }
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket disconnected. Reconnecting in 3s...");
+            setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (err) => {
+            console.error("WebSocket error:", err);
+            ws.close();
+        };
+    }
+
+    // Start connection
+    connectWebSocket();
+
+</script>
+
+</body>
+</html>
