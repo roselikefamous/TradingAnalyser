@@ -26,6 +26,7 @@ from trading_terminal.ui import (
 )
 from trading_terminal.data import fetch_market_data, apply_indicators
 from trading_terminal.scanner import scan_all_assets_df
+from trading_terminal.data_qa.feed_monitor import check_feed_quality
 from streamlit_autorefresh import st_autorefresh
 from simulation import (
     new_simulation_state
@@ -293,6 +294,14 @@ news = market_data.news
 dividends = market_data.dividends
 earnings_dates = market_data.earnings_dates
 
+# ================== MLOps & QA CHECKS ==================
+is_clean, qa_issues = check_feed_quality(df)
+if not is_clean:
+    st.toast("⚠️ MLOps Warnung: Mögliche Fehleinspeisung/Anomalie im Datenfeed erkannt.", icon="⚠️")
+    with st.expander("🚨 Feed Quality Issues Detected", expanded=True):
+        for issue in qa_issues:
+            st.error(issue)
+
 # ================== APPLY INDICATORS ==================
 df = apply_indicators(df, ema1_len, ema2_len, rsi_len)
 current_price = df['Close'].iloc[-1]
@@ -367,34 +376,34 @@ with tab_chart:
                 increasing_line_color='#26a69a', decreasing_line_color='#ef5350'), row=1, col=1)
         elif chart_type == "Line":
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
-                line=dict(color='#26a69a', width=2), name='Close'), row=1, col=1)
+                line={"color": '#26a69a', "width": 2}, name='Close'), row=1, col=1)
         elif chart_type == "Area":
             fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Close'], mode='lines',
-                line=dict(color='#26a69a', width=2), fill='tozeroy',
+                line={"color": '#26a69a', "width": 2}, fill='tozeroy',
                 fillcolor='rgba(38,166,154,0.15)', name='Close'), row=1, col=1)
 
         # EMA Overlays
         if show_ema:
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_1'], line=dict(color=ema1_col, width=1.5), name=f'EMA {ema1_len}'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_2'], line=dict(color=ema2_col, width=1.5), name=f'EMA {ema2_len}'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_55'], line=dict(color='#7c4dff', width=1, dash='dot'), name='EMA 55'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_1'], line={"color": ema1_col, "width": 1.5}, name=f'EMA {ema1_len}'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_2'], line={"color": ema2_col, "width": 1.5}, name=f'EMA {ema2_len}'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['EMA_55'], line={"color": '#7c4dff', "width": 1, "dash": 'dot'}, name='EMA 55'), row=1, col=1)
 
         # SMA Overlays
         if show_sma:
             if 'SMA_50' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line=dict(color='#ff9800', width=1.5, dash='dash'), name='SMA 50'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_50'], line={"color": '#ff9800', "width": 1.5, "dash": 'dash'}, name='SMA 50'), row=1, col=1)
             if 'SMA_200' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line=dict(color='#f44336', width=1.5, dash='dash'), name='SMA 200'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line={"color": '#f44336', "width": 1.5, "dash": 'dash'}, name='SMA 200'), row=1, col=1)
 
         # VWAP
         if show_vwap and 'VWAP' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line=dict(color='#ffeb3b', width=1.5), name='VWAP'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], line={"color": '#ffeb3b', "width": 1.5}, name='VWAP'), row=1, col=1)
 
         # Ichimoku Cloud
         if show_ichimoku:
             tenkan, kijun, senkou_a, senkou_b, chikou = calc_ichimoku(df)
-            fig.add_trace(go.Scatter(x=df.index, y=tenkan, line=dict(color='#2196f3', width=1), name='Tenkan'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=kijun, line=dict(color='#f44336', width=1), name='Kijun'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=tenkan, line={"color": '#2196f3', "width": 1}, name='Tenkan'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=kijun, line={"color": '#f44336', "width": 1}, name='Kijun'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=senkou_a, line=dict(color='rgba(0,230,118,0.4)', width=0.5), name='Senkou A'), row=1, col=1)
             fig.add_trace(go.Scatter(x=df.index, y=senkou_b, line=dict(color='rgba(239,83,80,0.4)', width=0.5),
                 fill='tonexty', fillcolor='rgba(38,166,154,0.08)', name='Senkou B'), row=1, col=1)
@@ -404,16 +413,16 @@ with tab_chart:
             sar = calc_parabolic_sar(df)
             bull_sar = sar.where(sar < df['Close'])
             bear_sar = sar.where(sar >= df['Close'])
-            fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker=dict(size=3, color='#00e676'), name='SAR Bull'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker=dict(size=3, color='#ff1744'), name='SAR Bear'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker={\"size\": 3, \"color\": '#00e676'}, name='SAR Bull'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker={\"size\": 3, \"color\": '#ff1744'}, name='SAR Bear'), row=1, col=1)
 
         # SuperTrend
         if show_supertrend:
             st_line, st_dir = calc_supertrend(df)
             bull_st = st_line.where(st_dir == 1)
             bear_st = st_line.where(st_dir == -1)
-            fig.add_trace(go.Scatter(x=df.index, y=bull_st, line=dict(color='#00e676', width=2), name='SuperTrend ↑'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=bear_st, line=dict(color='#ff1744', width=2), name='SuperTrend ↓'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bull_st, line={"color": '#00e676', "width": 2}, name='SuperTrend ↑'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bear_st, line={"color": '#ff1744', "width": 2}, name='SuperTrend ↓'), row=1, col=1)
 
         # Auto Fibonacci
         if show_fib:
@@ -430,7 +439,7 @@ with tab_chart:
                 comp_df = yf.Ticker(compare_asset).history(period=period, interval=interval)
                 comp_scaled = comp_df['Close'] * (plot_df['Close'].iloc[0] / comp_df['Close'].iloc[0])
                 fig.add_trace(go.Scatter(x=comp_df.index, y=comp_scaled, mode='lines',
-                    line=dict(color='yellow', width=1.5), name=compare_asset), row=1, col=1)
+                    line={"color": 'yellow', "width": 1.5}, name=compare_asset), row=1, col=1)
             except: pass
 
         # Volume Profile (VRVP) - horizontal volume histogram
@@ -452,9 +461,9 @@ with tab_chart:
             pp = (df['High'].shift(1) + df['Low'].shift(1) + df['Close'].shift(1)) / 3
             r1 = (2 * pp) - df['Low'].shift(1)
             s1 = (2 * pp) - df['High'].shift(1)
-            fig.add_trace(go.Scatter(x=df.index, y=pp, line=dict(color='#ab47bc', width=1, dash='dot'), name='Pivot'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=r1, line=dict(color='#ef5350', width=1, dash='dot'), name='R1'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=s1, line=dict(color='#26a69a', width=1, dash='dot'), name='S1'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=pp, line={"color": '#ab47bc', "width": 1, "dash": 'dot'}, name='Pivot'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=r1, line={"color": '#ef5350', "width": 1, "dash": 'dot'}, name='R1'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=s1, line={"color": '#26a69a', "width": 1, "dash": 'dot'}, name='S1'), row=1, col=1)
 
         # Candlestick Pattern Markers
         doji_idx = df.index[df['Doji']]
@@ -465,10 +474,10 @@ with tab_chart:
                 marker=dict(symbol='diamond', size=7, color='yellow'), name='Doji'), row=1, col=1)
         if len(hammer_idx) > 0:
             fig.add_trace(go.Scatter(x=hammer_idx, y=df.loc[hammer_idx, 'Low'] * 0.99, mode='text',
-                text='🔨', textfont=dict(size=12), name='Hammer'), row=1, col=1)
+                text='🔨', textfont={\"size\": 12}, name='Hammer'), row=1, col=1)
         if len(engulf_idx) > 0:
             fig.add_trace(go.Scatter(x=engulf_idx, y=df.loc[engulf_idx, 'High'] * 1.005, mode='text',
-                text='🟢', textfont=dict(size=10), name='Engulfing'), row=1, col=1)
+                text='🟢', textfont={\"size\": 10}, name='Engulfing'), row=1, col=1)
 
         # Dividend & Earnings overlays
         try:
@@ -496,10 +505,10 @@ with tab_chart:
             fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, name='Volume'), row=current_row, col=1)
             current_row += 1
         if "OBV" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line=dict(color='#ffeb3b', width=1.5), name='OBV'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['OBV'], line={"color": '#ffeb3b', "width": 1.5}, name='OBV'), row=current_row, col=1)
             current_row += 1
         if "RSI" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line=dict(color='#ab47bc', width=1.5), name='RSI'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], line={"color": '#ab47bc', "width": 1.5}, name='RSI'), row=current_row, col=1)
             fig.add_hline(y=70, line_dash="dot", line_color="gray", row=current_row, col=1)
             fig.add_hline(y=30, line_dash="dot", line_color="gray", row=current_row, col=1)
             fig.add_hline(y=50, line_dash="dot", line_color="rgba(255,255,255,0.1)", row=current_row, col=1)
@@ -507,17 +516,17 @@ with tab_chart:
         if "MACD" in subplots:
             fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'],
                 marker_color=['#26a69a' if v > 0 else '#ef5350' for v in df['MACD_Hist']], name='Histogram'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line=dict(color='#2962ff', width=1.5), name='MACD'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line=dict(color='#ff6d00', width=1), name='Signal'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], line={"color": '#2962ff', "width": 1.5}, name='MACD'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Signal'], line={"color": '#ff6d00', "width": 1}, name='Signal'), row=current_row, col=1)
             current_row += 1
         if "Stoch" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='#2196f3', width=1.5), name='%K'), row=current_row, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='#ff9800', width=1), name='%D'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line={"color": '#2196f3', "width": 1.5}, name='%K'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line={"color": '#ff9800', "width": 1}, name='%D'), row=current_row, col=1)
             fig.add_hline(y=80, line_dash="dot", line_color="gray", row=current_row, col=1)
             fig.add_hline(y=20, line_dash="dot", line_color="gray", row=current_row, col=1)
             current_row += 1
         if "ATR" in subplots:
-            fig.add_trace(go.Scatter(x=df.index, y=df['ATR'], line=dict(color='#ff9800', width=1.5), name='ATR'), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['ATR'], line={"color": '#ff9800', "width": 1.5}, name='ATR'), row=current_row, col=1)
             current_row += 1
 
         fig.update_layout(template="plotly_dark", margin=dict(l=0, r=0, t=10, b=0), xaxis_rangeslider_visible=False,
@@ -750,8 +759,8 @@ with tab_chart:
             fig_ez.add_trace(go.Candlestick(x=pd_w.index, open=pd_w['Open'], high=pd_w['High'], low=pd_w['Low'], close=pd_w['Close'],
                 name="Price", increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
             df_w = df.iloc[-pw:]
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_1'], line=dict(color=ema1_col, width=1.2), name=f'EMA {ema1_len}'))
-            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_2'], line=dict(color=ema2_col, width=1.2), name=f'EMA {ema2_len}'))
+            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_1'], line={"color": ema1_col, "width": 1.2}, name=f'EMA {ema1_len}'))
+            fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['EMA_2'], line={"color": ema2_col, "width": 1.2}, name=f'EMA {ema2_len}'))
             fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Upper'], line=dict(color='rgba(255,255,255,0.12)', width=1), showlegend=False))
             fig_ez.add_trace(go.Scatter(x=df_w.index, y=df_w['BB_Lower'], line=dict(color='rgba(255,255,255,0.12)', width=1),
                 fill='tonexty', fillcolor='rgba(100,100,255,0.03)', showlegend=False))
@@ -780,7 +789,7 @@ with tab_chart:
                 annotation=dict(font=dict(color="white", size=12, family="monospace")))
             fig_ez.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=130, t=35, b=0),
                 paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False,
-                showlegend=True, legend=dict(orientation="h", y=-0.05, font=dict(size=10)),
+                showlegend=True, legend=dict(orientation="h", y=-0.05, font={\"size\": 10}),
                 title=dict(text=f"Entry-Analyse: {st.session_state.tickers[0]} — {d_emoji} {direction} (Score {score}/{max_score})",
                            font=dict(color=d_color, size=15)))
             if interval in ['1d','1wk']: fig_ez.update_xaxes(rangebreaks=[dict(bounds=["sat","mon"])])

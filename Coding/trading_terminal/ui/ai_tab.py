@@ -460,4 +460,83 @@ def render_ai_ml_suite_section(df: pd.DataFrame, current_price: float, now: date
 
 *Automatisch generiert – keine Anlageberatung.*"""
             st.markdown(report)
-            st.download_button("📥 Download", report, file_name=f"report_{st.session_state.tickers[0]}.md")
+
+    st.divider()
+    st.markdown("### 🔌 Live Paper Trading & Execution Layer")
+    
+    col_exec1, col_exec2 = st.columns([2, 1])
+    with col_exec1:
+        st.markdown("Sende manuell ermittelte Signale direkt an den **PaperBroker** (Simulation mit Slippage & Latenz).")
+        with st.form("paper_trade_form"):
+            s_col1, s_col2, s_col3 = st.columns(3)
+            exec_side = s_col1.selectbox("Richtung", ["BUY", "SELL"])
+            exec_type = s_col2.selectbox("Order Typ", ["MARKET", "LIMIT", "STOP"])
+            exec_qty = s_col3.number_input("Menge", min_value=0.01, value=1.0)
+            
+            exec_target = st.number_input("Limit/Stop Preis (Optional)", value=current_price, format="%.2f")
+            
+            submit_exec = st.form_submit_button("🚀 Order an PaperBroker senden")
+            
+            if submit_exec:
+                from trading_terminal.execution.broker import PaperBroker
+                from trading_terminal.execution.signals import ExecutionOrder, OrderSide, OrderType
+                
+                # Init or grab broker from session state to persist it across renders
+                if 'live_broker' not in st.session_state:
+                    st.session_state.live_broker = PaperBroker()
+                
+                broker: PaperBroker = st.session_state.live_broker
+                
+                side_enum = OrderSide.BUY if exec_side == "BUY" else OrderSide.SELL
+                type_enum = OrderType.MARKET if exec_type == "MARKET" else (OrderType.LIMIT if exec_type == "LIMIT" else OrderType.STOP)
+                target = exec_target if type_enum != OrderType.MARKET else None
+                
+                new_order = ExecutionOrder(
+                    symbol=st.session_state.tickers[0],
+                    side=side_enum,
+                    order_type=type_enum,
+                    quantity=exec_qty,
+                    price_target=target
+                )
+                
+                o_id = broker.place_order(new_order)
+                # Tick the broker immediately to simulate time passing for MARKET orders
+                broker.process_market_tick(now, st.session_state.tickers[0], current_price - 0.05, current_price + 0.05)
+                
+                st.success(f"Order #{o_id} platziert! Status im Broker-Log überprüfen.")
+                
+    with col_exec2:
+        st.markdown("#### Broker Status")
+        if 'live_broker' in st.session_state:
+            active_count = len(st.session_state.live_broker.active_orders)
+            fills_count = len(st.session_state.live_broker.fills)
+            st.metric("Pending Orders", active_count)
+            st.metric("Total Fills (Session)", fills_count)
+            
+            if st.button("Logs & Fills anzeigen"):
+                st.write([f"Fill: {f.side} {f.quantity} @ {f.price:.2f}" for f in st.session_state.live_broker.fills])
+        else:
+            st.info("Noch keine Orders in dieser Session gesendet.")
+
+    st.divider()
+    st.markdown("### 🔍 MLOps: Volatility Drift Detection")
+    st.markdown("Vergleicht die Volatilität der letzten 10 Tage mit den vorherigen 90 Tagen (Trainings-Referenz).")
+    if st.button("Drift-Analyse starten"):
+        from trading_terminal.mlops.drift import calculate_volatility_regime_drift
+        
+        if len(df) > 100:
+            df_train = df.iloc[-100:-10]
+            df_live = df.iloc[-10:]
+            
+            report = calculate_volatility_regime_drift(df_train, df_live)
+            
+            col_d1, col_d2 = st.columns(2)
+            col_d1.metric("Ref. Volatilität (Train)", f"{report.reference_mean*100:.1f}%")
+            col_d2.metric("Aktuelle Volatilität (Live)", f"{report.current_mean*100:.1f}%")
+            
+            if report.is_drifting:
+                st.error(f"🚨 **Drift erkannt!** Das Volatilitäts-Regime hat sich signifikant verändert (Ratio: {report.z_score:.2f}). Walk-Forward-Modelle sollten neu trainiert werden.")
+            else:
+                st.success(f"✅ **Kein Drift.** Das Marktregime ist stabil (Ratio: {report.z_score:.2f}). Modelle können weiterlaufen.")
+        else:
+            st.warning("Nicht genug Daten für eine sinnvolle Drift-Detection (<100 Kerzen).")
