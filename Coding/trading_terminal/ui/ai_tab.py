@@ -79,7 +79,7 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
             )
         )
         fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['BB_Mid'], line=dict(color='rgba(255,255,255,0.15)', width=1, dash='dot'), name='BB Mid'))
-        fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line=dict(color='#7c4dff', width=1.5), name='EMA 55 (Trend)'))
+        fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={\"color\": '#7c4dff', \"width\": 1.5}, name='EMA 55 (Trend)'))
 
         if entries:
             fig_s1.add_trace(go.Scatter(x=[e['Date'] for e in entries], y=[e['Entry'] for e in entries], mode='markers', marker=dict(symbol='triangle-up', size=14, color='#00e676'), name='🟢 ENTRY'))
@@ -108,8 +108,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['BB_Upper'], line=dict(color='rgba(255,100,100,0.4)', width=1), name='BB Upper'))
         fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['BB_Lower'], line=dict(color='rgba(100,255,100,0.4)', width=1), fill='tonexty', fillcolor='rgba(100,100,255,0.05)', name='BB Lower'))
         if 'VWAP' in df_s.columns:
-            fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['VWAP'], line=dict(color='#ffeb3b', width=1, dash='dot'), name='VWAP (TP Ref)'))
-        fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line=dict(color='#ff9800', width=1, dash='dot'), name='EMA 21 (TP Ref)'))
+            fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['VWAP'], line={\"color\": '#ffeb3b', \"width\": 1, \"dash\": 'dot'}, name='VWAP (TP Ref)'))
+        fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={\"color\": '#ff9800', \"width\": 1, \"dash\": 'dot'}, name='EMA 21 (TP Ref)'))
 
         if shorts:
             fig_s2.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker=dict(symbol='triangle-down', size=16, color='#ff1744'), name='SHORT Entry'))
@@ -167,8 +167,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
 
         fig_s4 = go.Figure()
         fig_s4.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
-        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line=dict(color='#ff9800', width=1.5), name='EMA 21'))
-        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line=dict(color='#7c4dff', width=1.5, dash='dot'), name='EMA 55'))
+        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={\"color\": '#ff9800', \"width\": 1.5}, name='EMA 21'))
+        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={\"color\": '#7c4dff', \"width\": 1.5, \"dash\": 'dot'}, name='EMA 55'))
 
         if shorts:
             fig_s4.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker=dict(symbol='triangle-down', size=16, color='#ff1744'), name='SHORT Entry'))
@@ -193,16 +193,16 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         fig_s5 = go.Figure()
         fig_s5.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
         if 'SMA_50' in df_s.columns:
-            fig_s5.add_trace(go.Scatter(x=df.index, y=df_s['SMA_50'], line=dict(color='#ffeb3b', width=1.5, dash='dot'), name='SMA 50 (S/R)'))
+            fig_s5.add_trace(go.Scatter(x=df.index, y=df_s['SMA_50'], line={\"color\": '#ffeb3b', \"width\": 1.5, \"dash\": 'dot'}, name='SMA 50 (S/R)'))
 
         if shorts:
-            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker=dict(symbol='triangle-down', size=16, color='#ff1744'), name='SHORT Entry'))
-            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['SL'] for s in shorts], mode='markers', marker=dict(symbol='x', size=10, color='#ff9100'), name='SHORT SL'))
+            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker={"symbol": 'triangle-down', "size": 16, "color": '#ff1744'}, name='SHORT Entry'))
+            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['SL'] for s in shorts], mode='markers', marker={"symbol": 'x', "size": 10, "color": '#ff9100'}, name='SHORT SL'))
         if longs:
-            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in longs], y=[s['Entry'] for s in longs], mode='markers+text', text=[f"🟢 {s['Pattern']}" for s in longs], textposition='top center', marker=dict(symbol='triangle-up', size=16, color='#00e676'), name='LONG Entry'))
-            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in longs], y=[s['SL'] for s in longs], mode='markers', marker=dict(symbol='x', size=10, color='#ff9100'), name='LONG SL'))
+            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in longs], y=[s['Entry'] for s in longs], mode='markers+text', text=[f"🟢 {s['Pattern']}" for s in longs], textposition='top center', marker={"symbol": 'triangle-up', "size": 16, "color": '#00e676'}, name='LONG Entry'))
+            fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in longs], y=[s['SL'] for s in longs], mode='markers', marker={"symbol": 'x', "size": 10, "color": '#ff9100'}, name='LONG SL'))
 
-        fig_s5.update_layout(template='plotly_dark', height=500, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False, showlegend=True)
+        fig_s5.update_layout(template='plotly_dark', height=500, margin={"l": 0, "r": 0, "t": 10, "b": 0}, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False, showlegend=True)
         st.plotly_chart(fig_s5, use_container_width=True)
         render_backtest_stats(backtest)
         st.info(f"**Gefundene Signale:** {len(shorts)} Shorts | {len(longs)} Longs")
@@ -307,7 +307,7 @@ def render_ai_ml_suite_section(df: pd.DataFrame, current_price: float, now: date
             min1_idx = window.iloc[:10].idxmin()
             min2_idx = window.iloc[10:].idxmin()
             if abs(df['Low'][min1_idx] - df['Low'][min2_idx]) / df['Low'][min1_idx] < 0.02:
-                patterns_found.append(f"📐 **Double Bottom** near ${df['Low'][min2_idx]:.2f} ({str(min2_idx)[:10]})")
+                patterns_found.append(f"📐 **Double Bottom** near ${df['Low'][min2_idx]:.2f} ({str(min2_idx)[0:10]})")
             if i >= 15:
                 seg = df['High'].iloc[i - 15:i]
                 mid = seg.iloc[5:10].max()
@@ -351,11 +351,11 @@ def render_ai_ml_suite_section(df: pd.DataFrame, current_price: float, now: date
             centroids, _ = km(pts.astype(float), min(5, len(pts)))
             centroids = sorted(centroids)
             fig_sr = go.Figure()
-            fig_sr.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
+            fig_sr.add_trace(go.Candlestick(x=list(df.index), open=list(df['Open']), high=list(df['High']), low=list(df['Low']), close=list(df['Close']), increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
             cols_sr = ['#ff1744', '#ff9800', '#ffeb3b', '#00e676', '#2196f3']
             for ic, c in enumerate(centroids):
                 fig_sr.add_hline(y=c, line_dash="dash", line_color=cols_sr[ic % len(cols_sr)], annotation_text=f"{'Support' if c < current_price else 'Resistance'} ${c:.2f}")
-            fig_sr.update_layout(template='plotly_dark', height=400, margin=dict(l=0, r=0, t=10, b=0), paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False)
+            fig_sr.update_layout(template='plotly_dark', height=400, margin={"l": 0, "r": 0, "t": 10, "b": 0}, paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False)
             st.plotly_chart(fig_sr, use_container_width=True)
 
     elif "Forecast" in ai_pick:
