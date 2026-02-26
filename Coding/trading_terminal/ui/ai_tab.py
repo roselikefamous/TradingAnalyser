@@ -12,6 +12,7 @@ from trading_terminal.strategies import (
     run_reversal,
     run_price_action,
     run_candlestick_reversal,
+    run_walk_forward_backtest,
     to_legacy_exit_dicts,
     to_legacy_signal_dicts,
 )
@@ -205,6 +206,62 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         st.plotly_chart(fig_s5, use_container_width=True)
         render_backtest_stats(backtest)
         st.info(f"**Gefundene Signale:** {len(shorts)} Shorts | {len(longs)} Longs")
+
+    st.divider()
+    with st.expander("🧪 Walk-Forward Validation (Out-of-Sample)"):
+        wf_col1, wf_col2, wf_col3 = st.columns(3)
+        wf_strategy_ui = wf_col1.selectbox(
+            "Strategie",
+            options=[
+                "bollinger_scalping",
+                "fibonacci_swing",
+                "reversal",
+                "price_action",
+                "candlestick_reversal",
+            ],
+            index=0,
+        )
+        wf_train = wf_col2.number_input("Train-Bars", min_value=100, max_value=2000, value=252, step=21)
+        wf_test = wf_col3.number_input("Test-Bars", min_value=20, max_value=500, value=63, step=7)
+        wf_step = st.number_input("Step-Bars", min_value=20, max_value=500, value=63, step=7)
+
+        if st.button("▶ Walk-Forward starten", use_container_width=True):
+            try:
+                folds, summary = run_walk_forward_backtest(
+                    df=df,
+                    strategy_name=wf_strategy_ui,
+                    train_size=int(wf_train),
+                    test_size=int(wf_test),
+                    step_size=int(wf_step),
+                )
+                st.success(f"{summary.folds} Folds berechnet ({summary.strategy}).")
+                s1, s2, s3, s4 = st.columns(4)
+                s1.metric("Profitable Folds", f"{summary.profitable_folds}/{summary.folds}")
+                s2.metric("Pass-Rate", f"{summary.pass_rate_pct:.1f}%")
+                s3.metric("Ø OOS P&L", f"{summary.avg_oos_net_pnl_pct:.2f}%")
+                s4.metric("Ø OOS R:R", f"1:{summary.avg_oos_rr:.2f}")
+                wf_df = pd.DataFrame(
+                    [
+                        {
+                            "Fold": f.fold,
+                            "Train Start": f.train_start.date(),
+                            "Train End": f.train_end.date(),
+                            "Test Start": f.test_start.date(),
+                            "Test End": f.test_end.date(),
+                            "Test Signals": f.test_signals,
+                            "Test Exits": f.test_exits,
+                            "Win Rate %": round(f.test_win_rate, 2),
+                            "Avg RR": round(f.test_avg_rr, 3),
+                            "Net PnL %": round(f.test_net_pnl_pct, 3),
+                        }
+                        for f in folds
+                    ]
+                )
+                st.dataframe(wf_df, use_container_width=True, hide_index=True)
+                if wf_strategy_ui in {"reversal", "price_action", "candlestick_reversal"}:
+                    st.caption("Hinweis: Exits für diese Strategie werden im Walk-Forward per TP/SL-Bar-Simulation approximiert.")
+            except Exception as e:
+                st.error(f"Walk-Forward fehlgeschlagen: {e}")
 
     st.divider()
     st.markdown("#### 📏 Trailing-Stop Empfehlung")

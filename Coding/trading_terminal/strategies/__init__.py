@@ -5,6 +5,7 @@ from .service import (
     run_reversal,
     run_price_action,
     run_candlestick_reversal,
+    run_walk_forward_backtest,
     to_legacy_exit_dicts,
     to_legacy_signal_dicts,
 )
@@ -16,7 +17,7 @@ __all__ = [
     "run_reversal",
     "run_price_action",
     "run_candlestick_reversal",
+    "run_walk_forward_backtest",
     "to_legacy_exit_dicts",
     "to_legacy_signal_dicts",
 ]
-

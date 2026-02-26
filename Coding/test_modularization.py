@@ -7,6 +7,7 @@ from trading_terminal.contracts import PositionSizeResult, StrategyExit, Strateg
 from trading_terminal.strategies import (
     compute_position_size,
     run_bollinger_scalping,
+    run_walk_forward_backtest,
     to_legacy_exit_dicts,
     to_legacy_signal_dicts,
 )
@@ -136,3 +137,66 @@ def test_backtest_cost_model_reduces_nominal_edge():
     no_cost = _calc_backtest_stats(entries, exits, fee_bps=0.0, slippage_bps=0.0)
     with_cost = _calc_backtest_stats(entries, exits, fee_bps=10.0, slippage_bps=10.0)
     assert with_cost["net_pnl_pct"] < no_cost["net_pnl_pct"]
+
+
+def test_walk_forward_input_validation():
+    df = _sample_ohlcv(40)
+    try:
+        run_walk_forward_backtest(df, train_size=50, test_size=10, step_size=10)
+        assert False, "Expected ValueError for insufficient rows"
+    except ValueError:
+        assert True
+
+
+def test_walk_forward_runs_with_monkeypatched_strategy(monkeypatch):
+    df = _sample_ohlcv(90)
+
+    def fake_runner(window_df):
+        entries = [{"Date": window_df.index[0], "Entry": 100.0, "SL": 99.0, "Type": "LONG"}]
+        exits = [{"Date": window_df.index[-1], "Price": 101.0, "Reason": "TP"}]
+        backtest = {"win_rate": 100.0, "avg_rr": 1.0, "net_pnl_pct": 1.0}
+        return entries, exits, backtest, window_df
+
+    monkeypatch.setattr("trading_terminal.strategies.service.strategy_bollinger_scalping", fake_runner)
+    folds, summary = run_walk_forward_backtest(
+        df,
+        strategy_name="bollinger_scalping",
+        train_size=40,
+        test_size=20,
+        step_size=10,
+    )
+    assert len(folds) > 0
+    assert summary.folds == len(folds)
+    assert summary.profitable_folds == len(folds)
+
+
+def test_walk_forward_mixed_strategy_with_simulated_exits(monkeypatch):
+    df = _sample_ohlcv(120)
+
+    def fake_mixed_runner(window_df):
+        entry_date = window_df.index[min(5, len(window_df) - 1)]
+        shorts = []
+        longs = [
+            {
+                "Date": entry_date,
+                "Entry": 100.0,
+                "SL": 99.0,
+                "TP": 101.0,
+                "Type": "LONG",
+                "Pattern": "Test",
+            }
+        ]
+        backtest = {"win_rate": 0.0, "avg_rr": 0.0, "net_pnl_pct": 0.0}
+        return shorts, longs, backtest, window_df
+
+    monkeypatch.setattr("trading_terminal.strategies.service.strategy_reversal", fake_mixed_runner)
+    folds, summary = run_walk_forward_backtest(
+        df,
+        strategy_name="reversal",
+        train_size=60,
+        test_size=20,
+        step_size=20,
+    )
+    assert len(folds) > 0
+    assert all(f.test_exits >= 0 for f in folds)
+    assert summary.folds == len(folds)

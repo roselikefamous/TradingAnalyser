@@ -100,3 +100,32 @@ class PositionSizeResult:
             risk_pct_actual=float(payload["risk_pct_actual"]),
             warning=bool(payload["warning"]),
         )
+
+
+@dataclass(frozen=True)
+class WalkForwardFoldResult:
+    fold: int
+    train_start: pd.Timestamp
+    train_end: pd.Timestamp
+    test_start: pd.Timestamp
+    test_end: pd.Timestamp
+    train_signals: int
+    test_signals: int
+    test_exits: int
+    test_win_rate: float
+    test_avg_rr: float
+    test_net_pnl_pct: float
+
+
+@dataclass(frozen=True)
+class WalkForwardSummary:
+    strategy: str
+    train_size: int
+    test_size: int
+    step_size: int
+    folds: int
+    profitable_folds: int
+    pass_rate_pct: float
+    avg_oos_net_pnl_pct: float
+    avg_oos_win_rate: float
+    avg_oos_rr: float
