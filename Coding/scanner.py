@@ -100,32 +100,44 @@ def score_asset(symbol: str, name: str, strategies: list) -> Optional[dict]:
         matching_books = engine_res['matching_books']
         
         # ── Validate MTF Confluence ──
-        # Don't buy on the 1H if the 1D trend is bearish
-        if raw_action == "BUY" and daily_trend == "BEAR":
-            direction = "🟡 NEUTRAL (MTF Block)"
-            direction_key = "NEUTRAL"
-            signals = ["1H Buy Blocked by 1D Bear Trend"]
-            score = score * 0.5  # Penalize score
-        elif raw_action == "SELL" and daily_trend == "BULL":
-            direction = "🟡 NEUTRAL (MTF Block)"
-            direction_key = "NEUTRAL"
-            signals = ["1H Sell Blocked by 1D Bull Trend"]
-            score = score * 0.5
-        else:
-            if raw_action == "BUY":
+        signals = [f"✅ {s[0]} ({s[1]})" for s in matching_books] if matching_books else []
+        
+        if raw_action == "BUY":
+            if daily_trend == "BEAR":
+                direction = "🟡 NEUTRAL (MTF Block)"
+                direction_key = "NEUTRAL"
+                signals.append("❌ 1H Buy Blocked by 1D Bear")
+                score = score * 0.5  # Penalize score
+            else:
                 direction = "🟢 KAUFEN"
                 direction_key = "BUY"
-            elif raw_action == "SELL":
+                if daily_trend == "BULL":
+                    signals.append("✅ MTF Confluence (1D Bull)")
+                    score = min(100.0, score + 20.0) # Bonus for MTF alignment
+                else:
+                    signals.append("⚠️ MTF Neutral (1D Sideways)")
+                    
+        elif raw_action == "SELL":
+            if daily_trend == "BULL":
+                direction = "🟡 NEUTRAL (MTF Block)"
+                direction_key = "NEUTRAL"
+                signals.append("❌ 1H Sell Blocked by 1D Bull")
+                score = score * 0.5
+            else:
                 direction = "🔴 VORSICHT"
                 direction_key = "SELL"
-            else:
-                direction = "🟡 NEUTRAL"
-                direction_key = "NEUTRAL"
-                
-            signals = [f"✅ {s[0]} ({s[1]})" for s in matching_books] if matching_books else []
-            if daily_trend == "BULL" and raw_action == "BUY":
-                signals.append("✅ MTF Confluence (1D Bull)")
-                score = min(100, score + 10) # Bonus for MTF alignment
+                if daily_trend == "BEAR":
+                    signals.append("✅ MTF Confluence (1D Bear)")
+                    score = min(100.0, score + 20.0)
+                else:
+                    signals.append("⚠️ MTF Neutral (1D Sideways)")
+        else:
+            direction = "🟡 NEUTRAL"
+            direction_key = "NEUTRAL"
+            if daily_trend == "BULL":
+                signals.append("ℹ️ 1D Trend is Bull (No Entry)")
+            elif daily_trend == "BEAR":
+                signals.append("ℹ️ 1D Trend is Bear (No Entry)")
 
         last_1h = df_1h.iloc[-1]
         close = last_1h["Close"]
