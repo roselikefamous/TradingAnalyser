@@ -146,18 +146,26 @@ def calc_rsi(series: pd.Series, period=14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    loss_safe = loss.replace(0, np.nan)
+    rs = gain / loss_safe
+    rsi = 100 - (100 / (1 + rs))
+
+    # Define edge cases explicitly: no losses => RSI 100, no gains => RSI 0, flat => 50.
+    rsi = rsi.where(~((loss == 0) & (gain > 0)), 100)
+    rsi = rsi.where(~((gain == 0) & (loss > 0)), 0)
+    rsi = rsi.where(~((gain == 0) & (loss == 0)), 50)
+    return rsi.clip(lower=0, upper=100)
 
 
 def calc_stochastic(df: pd.DataFrame, k_period=14, d_period=3, smooth_k=3):
     """Stochastic Oscillator – %K and %D."""
     lowest_low = df['Low'].rolling(k_period).min()
     highest_high = df['High'].rolling(k_period).max()
-    raw_k = 100 * (df['Close'] - lowest_low) / (highest_high - lowest_low)
+    range_span = (highest_high - lowest_low).replace(0, np.nan)
+    raw_k = 100 * (df['Close'] - lowest_low) / range_span
     k = raw_k.rolling(smooth_k).mean()  # smoothed %K
     d = k.rolling(d_period).mean()  # %D
-    return k, d
+    return k.clip(lower=0, upper=100), d.clip(lower=0, upper=100)
 
 
 # ═══════════════════════════════════════════════════════════

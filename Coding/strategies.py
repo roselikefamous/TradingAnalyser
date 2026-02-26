@@ -5,10 +5,10 @@ Three strategies with full backtesting capabilities.
 import numpy as np
 import pandas as pd
 from indicators import (
-    calc_ema, calc_bollinger_bands, calc_rsi, calc_vwap,
+    calc_ema, calc_sma, calc_bollinger_bands, calc_rsi, calc_vwap,
     calc_stochastic, calc_atr, calc_fibonacci_levels, detect_hammer,
     detect_doji, detect_spinning_top, detect_bullish_engulfing,
-    detect_harami, find_swing_points
+    detect_bearish_engulfing, detect_shooting_star, detect_harami, find_swing_points
 )
 
 
@@ -351,11 +351,184 @@ def strategy_fibonacci_swing(df: pd.DataFrame, lookback=60):
 
 
 # ═══════════════════════════════════════════════════════════
+# STRATEGY 4: PRICE ACTION (INSIDE BAR BREAKOUT)
+# ═══════════════════════════════════════════════════════════
+
+def strategy_price_action(df: pd.DataFrame):
+    """Price Action Breakout Strategy (Inside Bar).
+
+    Rules:
+    - Target: Inside Bar (Current High < Prev High AND Current Low > Prev Low)
+    - Entry: Break of Inside Bar High (LONG) or Low (SHORT)
+    - Stop-Loss: Opposite side of Inside Bar
+    - Take Profit: 1.5x Risk
+    
+    Returns:
+        short_signals, long_signals, backtest, df_s
+    """
+    ema_21 = calc_ema(df['Close'], 21)
+    ema_55 = calc_ema(df['Close'], 55)
+
+    df_s = df.copy()
+    df_s['EMA_21'] = ema_21
+    df_s['EMA_55'] = ema_55
+    
+    short_signals = []
+    long_signals = []
+    
+    for i in range(2, len(df_s)):
+        if pd.isna(df_s['EMA_55'].iloc[i]):
+            continue
+            
+        # Inside bar detection
+        prev_high = df_s['High'].iloc[i-1]
+        prev_low = df_s['Low'].iloc[i-1]
+        curr_high = df_s['High'].iloc[i]
+        curr_low = df_s['Low'].iloc[i]
+        
+        is_inside_bar = (curr_high < prev_high) and (curr_low > prev_low)
+        
+        if is_inside_bar:
+            # Check for breakout in the next candle (i+1) if it exists, or simulated
+            if i + 1 < len(df_s):
+                next_high = df_s['High'].iloc[i+1]
+                next_low = df_s['Low'].iloc[i+1]
+                
+                # Uptrend context
+                if ema_21.iloc[i] > ema_55.iloc[i]:
+                    if next_high > curr_high: # Breakout long
+                        entry_price = curr_high
+                        sl_price = curr_low
+                        risk = entry_price - sl_price
+                        tp_price = entry_price + (1.5 * risk) if risk > 0 else entry_price * 1.02
+                        
+                        long_signals.append({
+                            'Date': df_s.index[i+1],
+                            'Entry': entry_price,
+                            'SL': sl_price,
+                            'TP': tp_price,
+                            'Type': 'LONG',
+                            'Pattern': 'Inside Bar Breakout UP'
+                        })
+                # Downtrend context
+                elif ema_21.iloc[i] < ema_55.iloc[i]:
+                    if next_low < curr_low: # Breakout short
+                        entry_price = curr_low
+                        sl_price = curr_high
+                        risk = sl_price - entry_price
+                        tp_price = entry_price - (1.5 * risk) if risk > 0 else entry_price * 0.98
+                        
+                        short_signals.append({
+                            'Date': df_s.index[i+1],
+                            'Entry': entry_price,
+                            'SL': sl_price,
+                            'TP': tp_price,
+                            'Type': 'SHORT',
+                            'Pattern': 'Inside Bar Breakout DOWN'
+                        })
+
+    backtest = _calc_backtest_stats_mixed(short_signals, long_signals, df_s)
+    return short_signals, long_signals, backtest, df_s
+
+
+# ═══════════════════════════════════════════════════════════
+# STRATEGY 5: ADVANCED CANDLESTICK REVERSAL
+# ═══════════════════════════════════════════════════════════
+
+def strategy_candlestick_reversal(df: pd.DataFrame):
+    """Advanced Candlestick Reversal Strategy.
+
+    Rules:
+    - Identifies strong reversal patterns (Engulfing, Hammer/Shooting Star)
+    - Confirms with RSI (Oversold < 35 for LONG, Overbought > 65 for SHORT)
+    - Entry: Next candle open
+    - SL: Pattern High/Low
+    - TP: 2x Risk or next moving average support/resistance
+    """
+    rsi = calc_rsi(df['Close'], 14)
+    sma_50 = calc_sma(df['Close'], 50)
+
+    df_s = df.copy()
+    df_s['RSI'] = rsi
+    df_s['SMA_50'] = sma_50
+    df_s['Bullish_Eng'] = detect_bullish_engulfing(df)
+    df_s['Bearish_Eng'] = detect_bearish_engulfing(df)
+    df_s['Hammer'] = detect_hammer(df)
+    df_s['Shooting_Star'] = detect_shooting_star(df)
+    
+    short_signals = []
+    long_signals = []
+    
+    for i in range(1, len(df_s)-1):
+        if pd.isna(df_s['RSI'].iloc[i]):
+            continue
+            
+        is_bull_eng = df_s['Bullish_Eng'].iloc[i]
+        is_hammer = df_s['Hammer'].iloc[i]
+        
+        is_bear_eng = df_s['Bearish_Eng'].iloc[i]
+        is_star = df_s['Shooting_Star'].iloc[i]
+        
+        # LONG signals
+        if (is_bull_eng or is_hammer) and df_s['RSI'].iloc[i] < 35:
+            entry_price = df_s['Open'].iloc[i+1] # Enter next day open
+            sl_price = df_s['Low'].iloc[i] # Stop below pattern low
+            risk = entry_price - sl_price
+            
+            # If entry is somehow below SL (gap down), invalidate
+            if risk > 0:
+                tp_price = entry_price + (2.0 * risk)
+                if df_s['SMA_50'].iloc[i] > entry_price + risk:
+                    tp_price = min(tp_price, df_s['SMA_50'].iloc[i])
+                
+                pattern_name = 'Bullish Engulfing' if is_bull_eng else 'Hammer'
+                
+                long_signals.append({
+                    'Date': df_s.index[i+1],
+                    'Entry': entry_price,
+                    'SL': sl_price,
+                    'TP': tp_price,
+                    'Type': 'LONG',
+                    'Pattern': pattern_name,
+                    'RSI': df_s['RSI'].iloc[i]
+                })
+        
+        # SHORT signals
+        if (is_bear_eng or is_star) and df_s['RSI'].iloc[i] > 65:
+            entry_price = df_s['Open'].iloc[i+1]
+            sl_price = df_s['High'].iloc[i]
+            risk = sl_price - entry_price
+            
+            if risk > 0:
+                tp_price = entry_price - (2.0 * risk)
+                if df_s['SMA_50'].iloc[i] < entry_price - risk:
+                    tp_price = max(tp_price, df_s['SMA_50'].iloc[i])
+                    
+                pattern_name = 'Bearish Engulfing' if is_bear_eng else 'Shooting Star'
+                
+                short_signals.append({
+                    'Date': df_s.index[i+1],
+                    'Entry': entry_price,
+                    'SL': sl_price,
+                    'TP': tp_price,
+                    'Type': 'SHORT',
+                    'Pattern': pattern_name,
+                    'RSI': df_s['RSI'].iloc[i]
+                })
+
+    backtest = _calc_backtest_stats_mixed(short_signals, long_signals, df_s)
+    return short_signals, long_signals, backtest, df_s
+
+
+# ═══════════════════════════════════════════════════════════
 # BACKTEST HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════
 
-def _calc_backtest_stats(entries, exits, direction='LONG'):
-    """Calculate backtest statistics for entry/exit pairs."""
+def _calc_backtest_stats(entries, exits, direction='LONG', fee_bps=5.0, slippage_bps=3.0):
+    """Calculate backtest statistics for entry/exit pairs.
+
+    fee_bps and slippage_bps are applied on entry and exit (round-trip).
+    """
     if not entries:
         return {'total_signals': 0, 'total_exits': 0, 'win_rate': 0,
                 'avg_rr': 0, 'net_pnl_pct': 0, 'winners': 0, 'losers': 0}
@@ -380,9 +553,14 @@ def _calc_backtest_stats(entries, exits, direction='LONG'):
         else:
             pnl = entry - exit_price
 
+        # Round-trip transaction cost model: fees + slippage on both legs.
+        total_cost_pct = (2 * (fee_bps + slippage_bps)) / 10000
+        pnl_pct = (pnl / entry) - total_cost_pct
+        pnl = pnl_pct * entry
+
         rr = pnl / risk if risk > 0 else 0
         total_rr += rr
-        total_pnl += pnl / entry * 100  # percentage
+        total_pnl += pnl_pct * 100
 
         if pnl > 0:
             winners += 1
@@ -401,7 +579,7 @@ def _calc_backtest_stats(entries, exits, direction='LONG'):
     }
 
 
-def _calc_backtest_stats_mixed(shorts, longs, df_s):
+def _calc_backtest_stats_mixed(shorts, longs, df_s, fee_bps=5.0, slippage_bps=3.0):
     """Calculate combined stats for mixed long/short signals."""
     total = len(shorts) + len(longs)
     if total == 0:
@@ -412,7 +590,10 @@ def _calc_backtest_stats_mixed(shorts, longs, df_s):
     for sig in shorts + longs:
         risk = abs(sig['Entry'] - sig['SL'])
         reward = abs(sig['Entry'] - sig['TP'])
-        rr = reward / risk if risk > 0 else 0
+        rr_raw = reward / risk if risk > 0 else 0
+        total_cost_pct = (2 * (fee_bps + slippage_bps)) / 10000
+        rr_cost = total_cost_pct / (risk / sig['Entry']) if risk > 0 and sig['Entry'] > 0 else 0
+        rr = rr_raw - rr_cost
         all_rr.append(rr)
 
     return {

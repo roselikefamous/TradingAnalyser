@@ -159,6 +159,18 @@ def score_asset(symbol: str, name: str, strategies: list) -> Optional[dict]:
         perf_1d = (df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-2] - 1) * 100 if len(df_1d) >= 2 else 0
         perf_5d = (df_1d["Close"].iloc[-1] / df_1d["Close"].iloc[-6] - 1) * 100 if len(df_1d) >= 6 else 0
 
+        # Check for Candlestick Patterns in 1D
+        patterns_found = []
+        if last_1d.get("Bullish_Engulfing", False): patterns_found.append("Bullish Engulfing")
+        if last_1d.get("Bearish_Engulfing", False): patterns_found.append("Bearish Engulfing")
+        if last_1d.get("Hammer", False): patterns_found.append("Hammer")
+        if last_1d.get("Shooting_Star", False): patterns_found.append("Shooting Star")
+        if last_1d.get("Harami", False): patterns_found.append("Harami")
+        
+        pattern_str = f"Trend: {daily_trend}"
+        if patterns_found:
+            pattern_str += f" | 🕯️ {', '.join(patterns_found)}"
+
         return {
             "Symbol": symbol,
             "Name": name,
@@ -173,7 +185,7 @@ def score_asset(symbol: str, name: str, strategies: list) -> Optional[dict]:
             "5T %": round(perf_5d, 2),
             "RSI": round(rsi, 1) if not np.isnan(rsi) else None,
             "ADX": round(adx, 1) if not np.isnan(adx) else None,
-            "Pattern": f"Trend: {daily_trend}",
+            "Pattern": pattern_str,
             "Signale": " | ".join(signals) if signals else "Keine Buch-Signale aktiv",
             "EMA_Layers": 0, # Legacy field
         }

@@ -5,6 +5,8 @@ from strategies import (
     strategy_bollinger_scalping,
     strategy_fibonacci_swing,
     strategy_reversal,
+    strategy_price_action,
+    strategy_candlestick_reversal,
 )
 from trading_terminal.contracts import PositionSizeResult, StrategyExit, StrategySignal
 
@@ -52,4 +54,22 @@ def run_fibonacci_swing(
     entry_contracts = [StrategySignal.from_legacy(e) for e in entries]
     exit_contracts = [StrategyExit.from_legacy(e) for e in exits]
     return entry_contracts, exit_contracts, backtest, df_s, fib_data
+
+
+def run_price_action(
+    df: pd.DataFrame,
+) -> tuple[list[StrategySignal], list[StrategySignal], dict, pd.DataFrame]:
+    shorts, longs, backtest, df_s = strategy_price_action(df)
+    short_contracts = [StrategySignal.from_legacy(s) for s in shorts]
+    long_contracts = [StrategySignal.from_legacy(l) for l in longs]
+    return short_contracts, long_contracts, backtest, df_s
+
+
+def run_candlestick_reversal(
+    df: pd.DataFrame,
+) -> tuple[list[StrategySignal], list[StrategySignal], dict, pd.DataFrame]:
+    shorts, longs, backtest, df_s = strategy_candlestick_reversal(df)
+    short_contracts = [StrategySignal.from_legacy(s) for s in shorts]
+    long_contracts = [StrategySignal.from_legacy(l) for l in longs]
+    return short_contracts, long_contracts, backtest, df_s
 

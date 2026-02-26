@@ -3,6 +3,8 @@ from .service import (
     run_bollinger_scalping,
     run_fibonacci_swing,
     run_reversal,
+    run_price_action,
+    run_candlestick_reversal,
     to_legacy_exit_dicts,
     to_legacy_signal_dicts,
 )
@@ -12,6 +14,8 @@ __all__ = [
     "run_bollinger_scalping",
     "run_fibonacci_swing",
     "run_reversal",
+    "run_price_action",
+    "run_candlestick_reversal",
     "to_legacy_exit_dicts",
     "to_legacy_signal_dicts",
 ]

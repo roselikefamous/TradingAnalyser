@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from indicators import calc_atr, calc_bollinger_bands, calc_ema
+from indicators import calc_rsi, calc_stochastic
 from trading_terminal.contracts import PositionSizeResult, StrategyExit, StrategySignal
 from trading_terminal.strategies import (
     compute_position_size,
@@ -9,6 +10,7 @@ from trading_terminal.strategies import (
     to_legacy_exit_dicts,
     to_legacy_signal_dicts,
 )
+from strategies import _calc_backtest_stats
 
 
 def _sample_ohlcv(n=120):
@@ -53,6 +55,28 @@ def test_bollinger_constant_series_collapse_to_midline():
     assert np.allclose(mid.iloc[valid], 50.0, atol=1e-9)
     assert np.allclose(upper.iloc[valid], 50.0, atol=1e-9)
     assert np.allclose(lower.iloc[valid], 50.0, atol=1e-9)
+
+
+def test_rsi_flat_series_converges_to_50():
+    prices = pd.Series([100.0] * 40)
+    rsi = calc_rsi(prices, period=14).dropna()
+    assert len(rsi) > 0
+    assert np.allclose(rsi.values, 50.0, atol=1e-9)
+
+
+def test_stochastic_constant_range_stays_bounded():
+    df = pd.DataFrame(
+        {
+            "High": [100.0] * 40,
+            "Low": [100.0] * 40,
+            "Close": [100.0] * 40,
+        }
+    )
+    k, d = calc_stochastic(df)
+    assert np.isfinite(k.dropna()).all()
+    assert np.isfinite(d.dropna()).all()
+    assert ((k.dropna() >= 0) & (k.dropna() <= 100)).all()
+    assert ((d.dropna() >= 0) & (d.dropna() <= 100)).all()
 
 
 def test_strategy_signal_contract_roundtrip():
@@ -105,3 +129,10 @@ def test_bollinger_service_returns_contracts_and_legacy_conversion():
     for exit_row in legacy_exits:
         assert {"Date", "Price", "Reason"}.issubset(exit_row.keys())
 
+
+def test_backtest_cost_model_reduces_nominal_edge():
+    entries = [{"Entry": 100.0, "SL": 99.0}]
+    exits = [{"Price": 101.0}]
+    no_cost = _calc_backtest_stats(entries, exits, fee_bps=0.0, slippage_bps=0.0)
+    with_cost = _calc_backtest_stats(entries, exits, fee_bps=10.0, slippage_bps=10.0)
+    assert with_cost["net_pnl_pct"] < no_cost["net_pnl_pct"]
