@@ -244,6 +244,22 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
                 s2.metric("Pass-Rate", f"{summary.pass_rate_pct:.1f}%")
                 s3.metric("Ø OOS P&L", f"{summary.avg_oos_net_pnl_pct:.2f}%")
                 s4.metric("Ø OOS R:R", f"1:{summary.avg_oos_rr:.2f}")
+
+                checks = {
+                    "mind. 3 Folds": summary.folds >= 3,
+                    "Pass-Rate >= 55%": summary.pass_rate_pct >= 55.0,
+                    "Ø OOS P&L > 0": summary.avg_oos_net_pnl_pct > 0.0,
+                    "Ø OOS R:R >= 0.8": summary.avg_oos_rr >= 0.8,
+                }
+                passed = sum(1 for ok in checks.values() if ok)
+                if passed == len(checks):
+                    st.success("✅ Go/No-Go: GO (alle Validierungsregeln erfüllt)")
+                elif passed >= 2:
+                    st.warning("🟡 Go/No-Go: CONDITIONAL (teilweise erfüllt, Risiko erhöht)")
+                else:
+                    st.error("🔴 Go/No-Go: NO-GO (zu schwache OOS-Qualität)")
+                st.caption("Validierungs-Checks: " + " | ".join([f"{'✅' if ok else '❌'} {name}" for name, ok in checks.items()]))
+
                 wf_df = pd.DataFrame(
                     [
                         {

@@ -71,3 +71,26 @@ def test_risk_engine_halts_on_daily_loss():
     # At least one trade exists, and halt eventually becomes true.
     assert len(res.trades) >= 1
     assert any(s.halted for s in res.risk_snapshots)
+
+
+def test_intrabar_mode_changes_same_bar_outcome():
+    idx = pd.date_range("2025-01-01", periods=2, freq="D")
+    df = pd.DataFrame(
+        {
+            "Open": [100.0, 100.0],
+            "High": [100.0, 103.0],
+            "Low": [99.0, 97.0],
+            "Close": [100.0, 100.0],
+        },
+        index=idx,
+    )
+    sig = BacktestSignal(date=idx[0], side="LONG", sl=98.0, tp=102.0, quantity=10, symbol="TEST")
+
+    cons = run_backtest(df, [sig], BacktestConfig(initial_cash=10_000, fee_bps=0.0, slippage_bps=0.0, intrabar_mode="conservative"))
+    opt = run_backtest(df, [sig], BacktestConfig(initial_cash=10_000, fee_bps=0.0, slippage_bps=0.0, intrabar_mode="optimistic"))
+    mid = run_backtest(df, [sig], BacktestConfig(initial_cash=10_000, fee_bps=0.0, slippage_bps=0.0, intrabar_mode="mid"))
+
+    assert cons.trades[0].exit_reason.endswith("conservative SL)")
+    assert opt.trades[0].exit_reason.endswith("optimistic TP)")
+    assert mid.trades[0].exit_reason.endswith("midpoint)")
+    assert cons.trades[0].net_pnl < mid.trades[0].net_pnl < opt.trades[0].net_pnl

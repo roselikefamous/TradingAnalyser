@@ -18,6 +18,7 @@ class BacktestConfig:
     slippage_bps: float = 3.0
     default_notional_pct: float = 0.10
     max_holding_bars: Optional[int] = None
+    intrabar_mode: str = "conservative"  # conservative | optimistic | mid
 
 
 def run_backtest(
@@ -27,6 +28,8 @@ def run_backtest(
     risk_config: Optional[RiskConfig] = None,
 ) -> BacktestRunResult:
     cfg = config or BacktestConfig()
+    if cfg.intrabar_mode not in {"conservative", "optimistic", "mid"}:
+        raise ValueError("intrabar_mode must be one of: conservative, optimistic, mid")
     risk = RiskEngine(risk_config or RiskConfig())
     if df.empty:
         return BacktestRunResult(
@@ -70,8 +73,15 @@ def run_backtest(
             hit_sl = low <= sl if side == "LONG" else high >= sl
 
             if hit_tp and hit_sl:
-                exit_price = sl
-                reason = "SL/TP same bar (conservative SL)"
+                if cfg.intrabar_mode == "conservative":
+                    exit_price = sl
+                    reason = "SL/TP same bar (conservative SL)"
+                elif cfg.intrabar_mode == "optimistic":
+                    exit_price = tp
+                    reason = "SL/TP same bar (optimistic TP)"
+                else:
+                    exit_price = (tp + sl) / 2
+                    reason = "SL/TP same bar (midpoint)"
             elif hit_sl:
                 exit_price = sl
                 reason = "SL"
@@ -190,4 +200,3 @@ def run_backtest(
         final_cash=float(cash),
         final_equity=float(final_equity),
     )
-
