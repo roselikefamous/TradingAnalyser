@@ -129,3 +129,69 @@ class WalkForwardSummary:
     avg_oos_net_pnl_pct: float
     avg_oos_win_rate: float
     avg_oos_rr: float
+
+
+@dataclass(frozen=True)
+class BacktestSignal:
+    date: pd.Timestamp
+    side: str  # LONG | SHORT
+    sl: float
+    tp: float
+    quantity: Optional[float] = None
+    symbol: str = "ASSET"
+
+
+@dataclass(frozen=True)
+class Order:
+    date: pd.Timestamp
+    symbol: str
+    side: str
+    quantity: float
+    order_type: str  # MARKET
+
+
+@dataclass(frozen=True)
+class Fill:
+    date: pd.Timestamp
+    symbol: str
+    side: str
+    quantity: float
+    price: float
+    fee: float
+    slippage_bps: float
+
+
+@dataclass(frozen=True)
+class Trade:
+    symbol: str
+    side: str
+    entry_date: pd.Timestamp
+    exit_date: pd.Timestamp
+    quantity: float
+    entry_price: float
+    exit_price: float
+    gross_pnl: float
+    net_pnl: float
+    fee_total: float
+    exit_reason: str
+
+
+@dataclass(frozen=True)
+class RiskSnapshot:
+    date: pd.Timestamp
+    equity: float
+    cash: float
+    gross_exposure: float
+    open_positions: int
+    drawdown_pct: float
+    daily_pnl: float
+    halted: bool
+
+
+@dataclass(frozen=True)
+class BacktestRunResult:
+    trades: list[Trade]
+    equity_curve: pd.DataFrame
+    risk_snapshots: list[RiskSnapshot]
+    final_cash: float
+    final_equity: float
