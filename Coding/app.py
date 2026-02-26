@@ -9,15 +9,30 @@ import datetime, sys, os
 import database as db
 db.init_db()
 
-from indicators import (
+from trading_terminal.indicators import (
     apply_core_indicators, calc_heikin_ashi, calc_ichimoku, calc_parabolic_sar,
     calc_supertrend, calc_volume_profile, auto_fibonacci, calc_bollinger_bands,
     calc_ema, calc_sma, find_swing_points
 )
-from strategies import strategy_bollinger_scalping, strategy_reversal, strategy_fibonacci_swing, calc_position_size
-from ui_helpers import TERMINAL_CSS, render_signal_card, render_backtest_stats, render_equity_curve, render_strategy_rules, INDICATOR_GUIDE
+from trading_terminal.strategies import (
+    compute_position_size,
+    run_bollinger_scalping,
+    run_fibonacci_swing,
+    run_reversal,
+    to_legacy_exit_dicts,
+    to_legacy_signal_dicts,
+)
+from trading_terminal.ui import (
+    TERMINAL_CSS,
+    render_signal_card,
+    render_backtest_stats,
+    render_equity_curve,
+    render_strategy_rules,
+    INDICATOR_GUIDE,
+)
+from trading_terminal.data import fetch_market_data, apply_indicators
+from trading_terminal.scanner import score_asset_contract, scan_all_assets_df
 from streamlit_autorefresh import st_autorefresh
-from scanner import scan_all_assets, PREDEFINED_ASSETS, score_asset
 from simulation import (
     new_simulation_state, open_positions_from_scanner,
     update_portfolio, get_current_equity, get_simulation_stats
@@ -93,7 +108,7 @@ if st.session_state.get('scanner_running'):
         progress_bar.progress(pct, text=f"🔄 Analysiere {symbol}... ({current}/{total})")
 
     with st.spinner(""):
-        scan_df = scan_all_assets(progress_callback=update_progress)
+        scan_df = scan_all_assets_df(progress_callback=update_progress)
 
     progress_bar.progress(1.0, text="✅ Scan abgeschlossen!")
     st.session_state['scanner_results'] = scan_df
@@ -267,25 +282,8 @@ period = period_map[tf_selection]
 interval = interval_map[tf_selection]
 
 # ================== DATA FETCHING ==================
-@st.cache_data(ttl=120)
-def fetch_data(ticker, p, i):
-    try:
-        t = yf.Ticker(ticker)
-        df = t.history(period=p, interval=i)
-        if df.empty: return None, None, None, None, None
-        try: info = t.info
-        except: info = {}
-        try: news = t.news
-        except: news = []
-        try: dividends = t.dividends
-        except: dividends = None
-        try: earnings_dates = t.get_earnings_dates(limit=5)
-        except: earnings_dates = None
-        return df, info, news, dividends, earnings_dates
-    except: return None, None, None, None, None
-
-df, info, news, dividends, earnings_dates = fetch_data(st.session_state.tickers[0], period, interval)
-if df is None or len(df) == 0:
+market_data = fetch_market_data(st.session_state.tickers[0], period, interval)
+if market_data is None or market_data.df is None or len(market_data.df) == 0:
     st.error(f"❌ Keine Daten für das Symbol '{st.session_state.tickers[0]}' gefunden. Bitte überprüfe die Schreibweise.")
     if st.button("🔄 Zurück setzen (Reset)", type="primary"):
         st.session_state.tickers[0] = "AAPL"
@@ -296,8 +294,14 @@ if df is None or len(df) == 0:
         st.rerun()
     st.stop()
 
+df = market_data.df
+info = market_data.info
+news = market_data.news
+dividends = market_data.dividends
+earnings_dates = market_data.earnings_dates
+
 # ================== APPLY INDICATORS ==================
-df = apply_core_indicators(df, ema1_len, ema2_len, rsi_len)
+df = apply_indicators(df, ema1_len, ema2_len, rsi_len)
 current_price = df['Close'].iloc[-1]
 prev_price = list(df['Close'])[-2] if len(df) > 1 else current_price
 pct_change = ((current_price - prev_price) / prev_price) * 100
@@ -387,15 +391,15 @@ with tab_home:
         active_strategies = db.get_all_strategies()
         for _hs in _wl_h:
             try:
-                _r = score_asset(_hs, "", active_strategies)
+                _r = score_asset_contract(_hs, "", active_strategies)
                 if _r:
-                    sc = _r["Score"]
-                    d = _r["DirectionKey"]
-                    p = _r["Kurs"]
-                    en = _r.get("Entry", p)
-                    sl = _r.get("SL", p * 0.98)
-                    tp = _r.get("TP", p * 1.05)
-                    pat = _r.get("Signale", "")
+                    sc = _r.score
+                    d = _r.direction_key
+                    p = _r.price
+                    en = _r.entry
+                    sl = _r.sl
+                    tp = _r.tp
+                    pat = _r.signal_notes
 
                     if d == "BUY":
                         _buy_h += 1
@@ -500,18 +504,18 @@ with tab_markt:
         for _wi, _wsym in enumerate(st.session_state.watchlist):
             _prog.progress((_wi + 1) / _n_syms, text=f"📡 {_wsym} (MTF AI Scan)...")
             try:
-                _res = score_asset(_wsym, "", active_strategies)
+                _res = score_asset_contract(_wsym, "", active_strategies)
             except Exception as e:
                 print(f"Error scanning {_wsym}: {e}")
                 _res = None
             if _res:
-                sc = _res["Score"]
-                d = _res["DirectionKey"]
-                p = _res["Kurs"]
-                en = _res.get("Entry", p)
-                sl = _res.get("SL", p * 0.98)
-                tp = _res.get("TP", p * 1.05)
-                pat = _res.get("Signale", "")
+                sc = _res.score
+                d = _res.direction_key
+                p = _res.price
+                en = _res.entry
+                sl = _res.sl
+                tp = _res.tp
+                pat = _res.signal_notes
                 _watchlist_signals.append((_wsym, sc, d, p, en, sl, tp, pat))
         _prog.empty()
 
@@ -1759,12 +1763,12 @@ with tab_ai:
         capital = psc1.number_input("Gesamtkapital ($)", value=10000.0, step=500.0)
         risk_pct = psc2.number_input("Risiko pro Trade (%)", value=1.0, min_value=0.1, max_value=5.0, step=0.5)
         sl_distance_input = psc3.number_input("Stop-Loss Abstand ($)", value=2.0, min_value=0.01, step=0.5)
-        ps_result = calc_position_size(capital, risk_pct, current_price, current_price - sl_distance_input)
+        ps_result = compute_position_size(capital, risk_pct, current_price, current_price - sl_distance_input)
         col_ps1, col_ps2, col_ps3 = st.columns(3)
-        col_ps1.metric("Max. Verlust", f"${ps_result['max_loss']:.2f}")
-        col_ps2.metric("Positionsgröße", f"{ps_result['shares']} Stück")
-        col_ps3.metric("Investitionsvolumen", f"${ps_result['investment']:,.2f}")
-        if ps_result['warning']:
+        col_ps1.metric("Max. Verlust", f"${ps_result.max_loss:.2f}")
+        col_ps2.metric("Positionsgröße", f"{ps_result.shares} Stück")
+        col_ps3.metric("Investitionsvolumen", f"${ps_result.investment:,.2f}")
+        if ps_result.warning:
             st.warning("⚠️ Investitionsvolumen übersteigt Gesamtkapital! Reduzieren Sie die Positionsgröße.")
         if risk_pct > 2.0:
             st.error("🚫 Risiko über 2%! Die universelle Regel empfiehlt max. 2% pro Trade.")
@@ -1776,7 +1780,9 @@ with tab_ai:
         st.markdown("#### 1️⃣ Bollinger Band Scalping (Trend-Korrektur)")
         st.caption("**Setup:** EMA 55 steigend → Kurs berührt unteres BB → bullische Kerze → Stop-Buy über dem Hoch. **SL:** Unter dem letzten Tief. **TP:** BB Mitte / Trailing.")
 
-        entries, exits, backtest, df_s = strategy_bollinger_scalping(df)
+        entry_contracts, exit_contracts, backtest, df_s = run_bollinger_scalping(df)
+        entries = to_legacy_signal_dicts(entry_contracts)
+        exits = to_legacy_exit_dicts(exit_contracts)
 
         fig_s1 = go.Figure()
         fig_s1.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
@@ -1812,7 +1818,9 @@ with tab_ai:
         st.markdown("#### 2️⃣ Top/Bottom Reversal (RSI >90/<10 + Doji/Spinning Top)")
         st.caption("**Setup:** 5+ aufsteigende Kerzen + RSI Extrem (>90) + oberes BB + Doji/Spinning Top → Short. Umgekehrt für Long.")
 
-        shorts, longs, backtest, df_s = strategy_reversal(df)
+        short_contracts, long_contracts, backtest, df_s = run_reversal(df)
+        shorts = to_legacy_signal_dicts(short_contracts)
+        longs = to_legacy_signal_dicts(long_contracts)
 
         fig_s2 = go.Figure()
         fig_s2.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
@@ -1848,7 +1856,9 @@ with tab_ai:
         st.markdown("#### 3️⃣ Fibonacci-Korrektur Swing (50%/61.8% + Candlestick Confirmation)")
         st.caption("**Setup:** Korrektur auf Fib 50%/61.8% → Hammer/Engulfing/Harami → Entry über Vortagshoch. **SL:** Unter Korrektur-Tief. **TP:** Trailing 3-4 Tage + Fib Extensions.")
 
-        fib_entries, fib_exits, backtest, _, fib_data = strategy_fibonacci_swing(df)
+        fib_entry_contracts, fib_exit_contracts, backtest, _, fib_data = run_fibonacci_swing(df)
+        fib_entries = to_legacy_signal_dicts(fib_entry_contracts)
+        fib_exits = to_legacy_exit_dicts(fib_exit_contracts)
 
         fig_s3 = go.Figure()
         fig_s3.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
