@@ -79,7 +79,7 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
             )
         )
         fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['BB_Mid'], line=dict(color='rgba(255,255,255,0.15)', width=1, dash='dot'), name='BB Mid'))
-        fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={\"color\": '#7c4dff', \"width\": 1.5}, name='EMA 55 (Trend)'))
+        fig_s1.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={"color": '#7c4dff', "width": 1.5}, name='EMA 55 (Trend)'))
 
         if entries:
             fig_s1.add_trace(go.Scatter(x=[e['Date'] for e in entries], y=[e['Entry'] for e in entries], mode='markers', marker=dict(symbol='triangle-up', size=14, color='#00e676'), name='🟢 ENTRY'))
@@ -108,8 +108,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['BB_Upper'], line=dict(color='rgba(255,100,100,0.4)', width=1), name='BB Upper'))
         fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['BB_Lower'], line=dict(color='rgba(100,255,100,0.4)', width=1), fill='tonexty', fillcolor='rgba(100,100,255,0.05)', name='BB Lower'))
         if 'VWAP' in df_s.columns:
-            fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['VWAP'], line={\"color\": '#ffeb3b', \"width\": 1, \"dash\": 'dot'}, name='VWAP (TP Ref)'))
-        fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={\"color\": '#ff9800', \"width\": 1, \"dash\": 'dot'}, name='EMA 21 (TP Ref)'))
+            fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['VWAP'], line={"color": '#ffeb3b', "width": 1, "dash": 'dot'}, name='VWAP (TP Ref)'))
+        fig_s2.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={"color": '#ff9800', "width": 1, "dash": 'dot'}, name='EMA 21 (TP Ref)'))
 
         if shorts:
             fig_s2.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker=dict(symbol='triangle-down', size=16, color='#ff1744'), name='SHORT Entry'))
@@ -167,8 +167,8 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
 
         fig_s4 = go.Figure()
         fig_s4.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
-        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={\"color\": '#ff9800', \"width\": 1.5}, name='EMA 21'))
-        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={\"color\": '#7c4dff', \"width\": 1.5, \"dash\": 'dot'}, name='EMA 55'))
+        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_21'], line={"color": '#ff9800', "width": 1.5}, name='EMA 21'))
+        fig_s4.add_trace(go.Scatter(x=df.index, y=df_s['EMA_55'], line={"color": '#7c4dff', "width": 1.5, "dash": 'dot'}, name='EMA 55'))
 
         if shorts:
             fig_s4.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker=dict(symbol='triangle-down', size=16, color='#ff1744'), name='SHORT Entry'))
@@ -193,7 +193,7 @@ def render_ai_strategy_backtest_section(df: pd.DataFrame, current_price: float) 
         fig_s5 = go.Figure()
         fig_s5.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='Price', increasing_line_color='#26a69a', decreasing_line_color='#ef5350'))
         if 'SMA_50' in df_s.columns:
-            fig_s5.add_trace(go.Scatter(x=df.index, y=df_s['SMA_50'], line={\"color\": '#ffeb3b', \"width\": 1.5, \"dash\": 'dot'}, name='SMA 50 (S/R)'))
+            fig_s5.add_trace(go.Scatter(x=df.index, y=df_s['SMA_50'], line={"color": '#ffeb3b', "width": 1.5, "dash": 'dot'}, name='SMA 50 (S/R)'))
 
         if shorts:
             fig_s5.add_trace(go.Scatter(x=[s['Date'] for s in shorts], y=[s['Entry'] for s in shorts], mode='markers+text', text=[f"🔴 {s['Pattern']}" for s in shorts], textposition='bottom center', marker={"symbol": 'triangle-down', "size": 16, "color": '#ff1744'}, name='SHORT Entry'))

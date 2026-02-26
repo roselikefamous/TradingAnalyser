@@ -74,14 +74,15 @@ for _pos in _sim.get('positions', []):
     if _alert_key in st.session_state.sltp_alerted:
         continue
     try:
-        _cur = yf.Ticker(_sym).fast_info['lastPrice']
-        if _cur <= _pos['sl']:
-            st.toast(f"🛑 SL getriggert: {_sym} fiel auf ${_cur:.2f} (SL war ${_pos['sl']:.2f})", icon="🔴")
-            st.session_state.sltp_alerted.add(_alert_key)
-        elif _cur >= _pos['tp']:
-            st.toast(f"🎯 TP erreicht! {_sym} stieg auf ${_cur:.2f} (TP war ${_pos['tp']:.2f})", icon="🟢")
-            st.session_state.sltp_alerted.add(_alert_key)
-    except:
+        _cur = yf.Ticker(_sym).fast_info.get('lastPrice')
+        if _cur:
+            if _cur <= _pos['sl']:
+                st.toast(f"🛑 SL getriggert: {_sym} fiel auf ${_cur:.2f} (SL war ${_pos['sl']:.2f})", icon="🔴")
+                st.session_state.sltp_alerted.add(_alert_key)
+            elif _cur >= _pos['tp']:
+                st.toast(f"🎯 TP erreicht! {_sym} stieg auf ${_cur:.2f} (TP war ${_pos['tp']:.2f})", icon="🟢")
+                st.session_state.sltp_alerted.add(_alert_key)
+    except Exception as e:
         pass
 
 # ── Phase 8: Morning Auto-Scan (09:00–10:00 once per day) ─────────────────────
@@ -413,8 +414,8 @@ with tab_chart:
             sar = calc_parabolic_sar(df)
             bull_sar = sar.where(sar < df['Close'])
             bear_sar = sar.where(sar >= df['Close'])
-            fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker={\"size\": 3, \"color\": '#00e676'}, name='SAR Bull'), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker={\"size\": 3, \"color\": '#ff1744'}, name='SAR Bear'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bull_sar, mode='markers', marker={"size": 3, "color": '#00e676'}, name='SAR Bull'), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=bear_sar, mode='markers', marker={"size": 3, "color": '#ff1744'}, name='SAR Bear'), row=1, col=1)
 
         # SuperTrend
         if show_supertrend:
@@ -437,10 +438,12 @@ with tab_chart:
         if compare_asset != "None":
             try:
                 comp_df = yf.Ticker(compare_asset).history(period=period, interval=interval)
-                comp_scaled = comp_df['Close'] * (plot_df['Close'].iloc[0] / comp_df['Close'].iloc[0])
-                fig.add_trace(go.Scatter(x=comp_df.index, y=comp_scaled, mode='lines',
-                    line={"color": 'yellow', "width": 1.5}, name=compare_asset), row=1, col=1)
-            except: pass
+                if not comp_df.empty:
+                    comp_scaled = comp_df['Close'] * (plot_df['Close'].iloc[0] / comp_df['Close'].iloc[0])
+                    fig.add_trace(go.Scatter(x=comp_df.index, y=comp_scaled, mode='lines',
+                        line={"color": 'yellow', "width": 1.5}, name=compare_asset), row=1, col=1)
+            except Exception:
+                pass
 
         # Volume Profile (VRVP) - horizontal volume histogram
         if show_vrvp:
@@ -474,10 +477,10 @@ with tab_chart:
                 marker=dict(symbol='diamond', size=7, color='yellow'), name='Doji'), row=1, col=1)
         if len(hammer_idx) > 0:
             fig.add_trace(go.Scatter(x=hammer_idx, y=df.loc[hammer_idx, 'Low'] * 0.99, mode='text',
-                text='🔨', textfont={\"size\": 12}, name='Hammer'), row=1, col=1)
+                text='🔨', textfont={'size': 12}, name='Hammer'), row=1, col=1)
         if len(engulf_idx) > 0:
             fig.add_trace(go.Scatter(x=engulf_idx, y=df.loc[engulf_idx, 'High'] * 1.005, mode='text',
-                text='🟢', textfont={\"size\": 10}, name='Engulfing'), row=1, col=1)
+                text='🟢', textfont={'size': 10}, name='Engulfing'), row=1, col=1)
 
         # Dividend & Earnings overlays
         try:
@@ -789,7 +792,7 @@ with tab_chart:
                 annotation=dict(font=dict(color="white", size=12, family="monospace")))
             fig_ez.update_layout(template="plotly_dark", height=600, margin=dict(l=0, r=130, t=35, b=0),
                 paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', xaxis_rangeslider_visible=False,
-                showlegend=True, legend=dict(orientation="h", y=-0.05, font={\"size\": 10}),
+                showlegend=True, legend=dict(orientation="h", y=-0.05, font={'size': 10}),
                 title=dict(text=f"Entry-Analyse: {st.session_state.tickers[0]} — {d_emoji} {direction} (Score {score}/{max_score})",
                            font=dict(color=d_color, size=15)))
             if interval in ['1d','1wk']: fig_ez.update_xaxes(rangebreaks=[dict(bounds=["sat","mon"])])
@@ -972,78 +975,137 @@ with tab_chart:
             c1, c2, c3, c4 = st.columns(4)
             var_95 = np.percentile(returns, 5)
             cvar_95 = returns[returns <= var_95].mean()
-            c1.metric("Value at Risk (95%)", f"{var_95*100:.2f}%")
-            c2.metric("CVaR (Expected Shortfall)", f"{cvar_95*100:.2f}%")
-            rf = 0.02 / 252
+            
+            ann_factor = 365 if "-USD" in st.session_state.tickers[0] else 252
+            rf = 0.02 / ann_factor
             downside = returns[returns < 0]
             sortino = (mean_ret - rf) / downside.std() if len(downside) > 0 else 0
             sharpe = (mean_ret - rf) / std_dev if std_dev > 0 else 0
             running_max = df['Close'].cummax()
             drawdown = (df['Close'] - running_max) / running_max
             max_dd = drawdown.min()
-            calmar = (mean_ret * 252) / abs(max_dd) if max_dd != 0 else 0
+            calmar = (mean_ret * ann_factor) / abs(max_dd) if max_dd != 0 else 0
             win_prob = len(returns[returns > 0]) / len(returns)
             avg_win = returns[returns > 0].mean()
             avg_loss = abs(returns[returns < 0].mean())
             wl_ratio = avg_win / avg_loss if avg_loss != 0 else 1
             kelly = win_prob - ((1 - win_prob) / wl_ratio) if wl_ratio > 0 else 0
-            c3.metric("Sortino Ratio", f"{sortino * np.sqrt(252):.2f}")
+            
+            c1.metric("Value at Risk (95%)", f"{var_95*100:.2f}%")
+            c2.metric("CVaR (Exp. Shortfall)", f"{cvar_95*100:.2f}%")
+            c3.metric("Sortino Ratio", f"{sortino * np.sqrt(ann_factor):.2f}")
             c4.metric("Calmar Ratio", f"{calmar:.2f}")
 
-            st.divider()
-            r1c, r2c = st.columns([2, 1])
+            st.markdown("---")
+            r1c, r2c = st.columns([2, 1], gap="large")
             with r1c:
-                st.markdown("**Max Drawdown (Underwater Chart)**")
-                fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(x=drawdown.index, y=drawdown*100, fill='tozeroy', mode='none', fillcolor='rgba(239,83,80,0.5)'))
-                fig_dd.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Drawdown %")
-                st.plotly_chart(fig_dd, use_container_width=True)
-                st.markdown("**30-Day Rolling Volatility**")
-                roll_vol = returns.rolling(30).std() * np.sqrt(252) * 100
-                fig_vol = go.Figure()
-                fig_vol.add_trace(go.Scatter(x=roll_vol.index, y=roll_vol, line=dict(color='#ff9800')))
-                fig_vol.update_layout(height=150, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117', yaxis_title="Volatility %")
-                st.plotly_chart(fig_vol, use_container_width=True)
-                st.markdown("**Monte Carlo Price Simulation (30 Days)**")
-                if st.button("Run 100 Simulations 🚀"):
-                    mc_fig = go.Figure()
-                    lp = df['Close'].iloc[-1]
-                    for _ in range(100):
-                        shocks = np.random.normal(loc=(mean_ret - 0.5*std_dev**2), scale=std_dev, size=30)
-                        price_path = lp * np.exp(np.cumsum(shocks))
-                        mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line={"width": 1, "color": 'rgba(38,166,154,0.1)'}))
-                    mc_fig.update_layout(height=300, showlegend=False, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117', plot_bgcolor='#0e1117')
-                    st.plotly_chart(mc_fig, use_container_width=True)
+                with st.container(border=True):
+                    st.markdown("#### 📉 Max Drawdown (Underwater Chart)")
+                    fig_dd = go.Figure()
+                    fig_dd.add_trace(go.Scatter(x=drawdown.index, y=drawdown*100, fill='tozeroy', mode='none', fillcolor='rgba(239,83,80,0.5)'))
+                    fig_dd.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=20), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(title="Drawdown %", gridcolor='#1e1e1e'), xaxis=dict(gridcolor='#1e1e1e'))
+                    st.plotly_chart(fig_dd, use_container_width=True)
+                
+                with st.container(border=True):
+                    st.markdown("#### 🌪️ 30-Day Rolling Volatility")
+                    roll_vol = returns.rolling(30).std() * np.sqrt(ann_factor) * 100
+                    fig_vol = go.Figure()
+                    fig_vol.add_trace(go.Scatter(x=roll_vol.index, y=roll_vol, line=dict(color='#ff9800', width=2)))
+                    fig_vol.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=20), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(title="Volatility %", gridcolor='#1e1e1e'), xaxis=dict(gridcolor='#1e1e1e'))
+                    st.plotly_chart(fig_vol, use_container_width=True)
+
+                with st.container(border=True):
+                    st.markdown("#### 🎲 Monte Carlo Price Simulation (30 Days)")
+                    if st.button("🚀 Run 100 Simulations", use_container_width=True):
+                        mc_fig = go.Figure()
+                        lp = df['Close'].iloc[-1]
+                        for _ in range(100):
+                            shocks = np.random.normal(loc=(mean_ret - 0.5*std_dev**2), scale=std_dev, size=30)
+                            price_path = lp * np.exp(np.cumsum(shocks))
+                            mc_fig.add_trace(go.Scatter(y=[lp]+list(price_path), mode='lines', line={"width": 1, "color": 'rgba(38,166,154,0.1)'}))
+                        mc_fig.update_layout(height=280, showlegend=False, margin=dict(l=0,r=0,t=10,b=0), template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', yaxis=dict(gridcolor='#1e1e1e'), xaxis=dict(gridcolor='#1e1e1e'))
+                        st.plotly_chart(mc_fig, use_container_width=True)
             with r2c:
-                ann_vol = std_dev * np.sqrt(252) * 100
-                gc = "green" if ann_vol < 15 else "yellow" if ann_vol < 30 else "red"
-                fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=ann_vol, number={'suffix': "%"},
-                    gauge={'axis': {'range': [None, 100]}, 'bar': {'color': gc},
-                           'steps': [{'range': [0,15], 'color': 'rgba(0,255,0,0.1)'}, {'range': [15,30], 'color': 'rgba(255,255,0,0.1)'}, {'range': [30,100], 'color': 'rgba(255,0,0,0.1)'}]}))
-                fig_gauge.update_layout(height=250, margin=dict(l=20,r=20,t=20,b=0), paper_bgcolor='#0e1117')
-                st.plotly_chart(fig_gauge, use_container_width=True)
-                st.info(f"**Kelly Criterion:** Optimal: {max(0, kelly)*100:.2f}% des Portfolios")
-                st.info(f"**Sharpe Ratio (ann.):** {sharpe * np.sqrt(252):.2f}")
+                with st.container(border=True):
+                    st.markdown("#### ⚡ Annualisierte Volatilität")
+                    ann_vol = std_dev * np.sqrt(ann_factor) * 100
+                    gc = "green" if ann_vol < 15 else "yellow" if ann_vol < 30 else "red"
+                    fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=ann_vol, number={'suffix': "%"},
+                        gauge={'axis': {'range': [None, max(100, ann_vol*1.2)]}, 'bar': {'color': gc},
+                               'steps': [{'range': [0,15], 'color': 'rgba(0,255,0,0.1)'}, {'range': [15,30], 'color': 'rgba(255,255,0,0.1)'}, {'range': [30,max(100, ann_vol*1.2)], 'color': 'rgba(255,0,0,0.1)'}]}))
+                    fig_gauge.update_layout(height=220, margin=dict(l=20,r=20,t=30,b=20), paper_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_gauge, use_container_width=True)
+                
+                with st.container(border=True):
+                    st.markdown("#### 💡 Risk Insights")
+                    st.info(f"**Sharpe Ratio (ann.):** {sharpe * np.sqrt(ann_factor):.2f}\n\n*(Ein Wert > 1.0 ist gut)*")
+                    st.success(f"**Kelly Criterion:** Optimal {max(0, kelly)*100:.2f}% des Portfolios riskieren.")
+                    st.warning(f"**Win Rate:** {win_prob*100:.1f}%\n\n**W/L Ratio:** {wl_ratio:.2f}")
 
 # ======= PORTFOLIO =======
 with tab_portfolio:
     st.markdown("### 💼 Portfolio Management & Analytics")
-    p1, p2 = st.columns([2, 1])
+    p1, p2 = st.columns([2, 1], gap="large")
     with p1:
-        st.markdown("#### 🟢 Open Positions")
+        st.markdown("#### 🟢 Offene Positionen")
         port_df = st.session_state.portfolio.copy()
-        port_df["CurrentPrice"] = port_df["EntryPrice"] * 1.05
-        port_df["PnL %"] = ((port_df["CurrentPrice"] - port_df["EntryPrice"]) / port_df["EntryPrice"]) * 100
-        port_df["TotalValue"] = port_df["CurrentPrice"] * port_df["Shares"]
-        st.dataframe(port_df, use_container_width=True, hide_index=True)
-        with st.expander("Paper Trading 💹"):
-            cA, cB, cC = st.columns(3)
+        if not port_df.empty:
+            port_df["CurrentPrice"] = port_df["EntryPrice"] * 1.05
+            port_df["PnL %"] = ((port_df["CurrentPrice"] - port_df["EntryPrice"]) / port_df["EntryPrice"]) * 100
+            port_df["TotalValue"] = port_df["CurrentPrice"] * port_df["Shares"]
+            st.dataframe(port_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Keine manuellen Positionen im Depot.")
+
+        st.markdown("---")
+        st.markdown("#### 📅 10-Jahres Saisonalität")
+        try:
+            hist_10y = yf.Ticker(st.session_state.tickers[0]).history(period="10y", interval="1mo")
+            hist_10y['Month'] = hist_10y.index.month
+            hist_10y['Ret'] = hist_10y['Close'].pct_change() * 100
+            seasonality = hist_10y.groupby('Month')['Ret'].mean()
+            fig_season = go.Figure(go.Bar(
+                x=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+                y=seasonality,
+                marker_color=['#26a69a' if v > 0 else '#ef5350' for v in seasonality],
+                opacity=0.85
+            ))
+            fig_season.update_layout(
+                height=250, margin=dict(l=0,r=0,t=10,b=20),
+                template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+                yaxis_title="Ø Rendite (%)", xaxis_title="Monat"
+            )
+            st.plotly_chart(fig_season, use_container_width=True)
+        except Exception:
+            st.warning("⚠️ Saisonalitätsdaten für dieses Asset aktuell nicht verfügbar.")
+
+    with p2:
+        with st.container(border=True):
+            st.markdown("#### 🥧 Asset Allocation")
+            if "TotalValue" in port_df.columns and not port_df.empty:
+                fig_pie = go.Figure(go.Pie(
+                    labels=port_df["Symbol"], values=port_df["TotalValue"],
+                    hole=0.6, marker=dict(colors=['#26a69a', '#29b6f6', '#ab47bc', '#ffca28', '#ef5350'])
+                ))
+                fig_pie.update_layout(
+                    height=220, margin=dict(l=0,r=0,t=0,b=0),
+                    template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)',
+                    showlegend=False
+                )
+                fig_pie.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.caption("Keine Daten für Allocation-Chart.")
+
+        with st.container(border=True):
+            st.markdown("#### 📝 Manueller Trade")
+            cA, cB = st.columns(2)
             trade_sym = cA.selectbox("Asset", st.session_state.watchlist, key="trade_sym")
             trade_shares = cB.number_input("Shares", min_value=1, value=10)
-            trade_price = cC.number_input("Entry Price", value=float(current_price))
-            if st.button("Buy / Add Position"):
+            trade_price = st.number_input("Einstiegspreis ($)", value=float(current_price))
+            if st.button("🛒 Position Hinzufügen", use_container_width=True, type="primary"):
                 new_pos = pd.DataFrame([{"Symbol": trade_sym, "Shares": trade_shares, "EntryPrice": trade_price}])
-                # Persist to DB
+                import datetime
                 db.add_position({
                     'symbol': trade_sym, 'direction': 'BUY',
                     'entry_price': trade_price, 'sl': trade_price * 0.95,
@@ -1052,29 +1114,14 @@ with tab_portfolio:
                 })
                 st.session_state.portfolio = pd.concat([st.session_state.portfolio, new_pos], ignore_index=True)
                 st.rerun()
-        st.markdown("#### 📅 Monthly Seasonality (10Y)")
-        try:
-            hist_10y = yf.Ticker(st.session_state.tickers[0]).history(period="10y", interval="1mo")
-            hist_10y['Month'] = hist_10y.index.month
-            hist_10y['Ret'] = hist_10y['Close'].pct_change() * 100
-            seasonality = hist_10y.groupby('Month')['Ret'].mean()
-            fig_season = go.Figure(go.Bar(x=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
-                y=seasonality, marker_color=['#26a69a' if v > 0 else '#ef5350' for v in seasonality]))
-            fig_season.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=0), template="plotly_dark", paper_bgcolor='#0e1117')
-            st.plotly_chart(fig_season, use_container_width=True)
-        except: st.write("Seasonality data not available.")
-    with p2:
-        st.markdown("#### 🥧 Asset Allocation")
-        if "TotalValue" in port_df.columns and not port_df.empty:
-            fig_pie = go.Figure(go.Pie(labels=port_df["Symbol"], values=port_df["TotalValue"], hole=0.4))
-            fig_pie.update_layout(height=180, margin=dict(l=0,r=0,t=0,b=20), template="plotly_dark", paper_bgcolor='#0e1117')
-            st.plotly_chart(fig_pie, use_container_width=True)
-        st.markdown("#### ⚙️ Tools")
-        st.radio("Base Currency", ["USD", "EUR", "GBP"], horizontal=True, key="base_curr")
-        with st.expander("Sektor-Performance"):
-            st.dataframe({"Sector": ["Tech", "Energy", "Health"], "Perf": ["+1.2%", "-0.5%", "+0.3%"]})
-        with st.expander("ETF Holdings"):
-            st.progress(0.12, text="AAPL (12%)"); st.progress(0.10, text="MSFT (10%)"); st.progress(0.08, text="NVDA (8%)")
+
+        with st.expander("⚙️ Erweiterte Tools", expanded=True):
+            st.radio("Base Currency", ["USD", "EUR", "GBP"], horizontal=True, key="base_curr")
+            st.dataframe({"Sector": ["Tech", "Energy", "Health"], "Perf": ["+1.2%", "-0.5%", "+0.3%"]}, use_container_width=True)
+            st.markdown("**Beispiel-Holdings:**")
+            st.progress(0.12, text="AAPL (12%)")
+            st.progress(0.10, text="MSFT (10%)")
+            st.progress(0.08, text="NVDA (8%)")
 
 # ======= MÄRKTE: SCANNER (secondary section inside tab_markt) =======
 with tab_markt:

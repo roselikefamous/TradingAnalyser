@@ -15,48 +15,65 @@ TERMINAL_CSS = """
 <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     .stApp { background-color: #0e1117; color: #fafafa; }
-    /* KPI cards with hover effect */
+    /* KPI cards with premium 3D hover effect */
     div[data-testid="metric-container"] {
-        background-color: #1a1d24; border: 1px solid #2d3139; padding: 15px; border-radius: 10px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        background: linear-gradient(145deg, #161922, #101217);
+        border: 1px solid #2d3139; padding: 18px; border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease, border-color 0.3s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    div[data-testid="metric-container"]::before {
+        content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, transparent, #26a69a, transparent); opacity: 0;
+        transition: opacity 0.3s;
     }
     div[data-testid="metric-container"]:hover {
-        transform: translateY(-3px); border-color: #26a69a;
-        box-shadow: 0 8px 25px rgba(38,166,154,0.25);
+        transform: translateY(-5px) scale(1.02);
+        border-color: #26a69a;
+        box-shadow: 0 12px 25px rgba(0,0,0,0.5), 0 0 15px rgba(38,166,154,0.15);
     }
+    div[data-testid="metric-container"]:hover::before { opacity: 1; }
+    
     div.row-widget.stRadio > div { flex-direction: row; }
     .stTextInput>div>div>input {
-        font-size: 18px !important; font-weight: bold !important;
-        text-transform: uppercase !important;
+        font-size: 16px !important; font-weight: 600 !important;
         background-color: #1a1d24 !important; border-color: #2d3139 !important;
+        border-radius: 8px !important;
+        transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .stTextInput>div>div>input:focus {
+        border-color: #26a69a !important; box-shadow: 0 0 0 2px rgba(38,166,154,0.2) !important;
     }
     /* Responsive */
     @media (max-width: 768px) {
         div[data-testid="metric-container"] { min-width: 100% !important; }
-        .stTabs [data-baseweb="tab-list"] { overflow-x: auto; flex-wrap: nowrap; }
+        .stTabs [data-baseweb="tab-list"] { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 5px; }
     }
-    /* Tab styling */
+    /* Tab styling (Premium) */
     .stTabs [data-baseweb="tab"] {
-        font-weight: 600 !important;
+        font-weight: 600 !important; font-size: 15px !important; color: #9e9e9e;
+        padding: 10px 16px !important; transition: color 0.2s;
     }
     .stTabs [aria-selected="true"] {
-        border-bottom-color: #26a69a !important;
+        color: #fff !important;
+        border-bottom: 3px solid #26a69a !important;
     }
     /* Floating Action Button */
     .fab-btn {
         position: fixed; bottom: 30px; right: 30px; z-index: 9999;
         background: linear-gradient(135deg, #26a69a, #00897b); color: white;
         border: none; border-radius: 50%; width: 56px; height: 56px; font-size: 22px;
-        cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.4);
-        transition: transform 0.2s;
+        cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s;
     }
-    .fab-btn:hover { transform: scale(1.1) rotate(10deg); }
+    .fab-btn:hover { transform: scale(1.15) rotate(15deg); box-shadow: 0 8px 25px rgba(38,166,154,0.4); }
     /* Skeleton loading animation */
-    @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:0.8} }
+    @keyframes pulse { 0% {opacity:0.6} 50% {opacity:1} 100% {opacity:0.6} }
     .skeleton {
         background: linear-gradient(90deg, #1e1e1e 25%, #2a2a2a 50%, #1e1e1e 75%);
-        background-size: 200% 100%; animation: pulse 1.5s infinite; border-radius: 8px; height: 200px;
+        background-size: 200% 100%; animation: pulse 1.5s ease-in-out infinite; border-radius: 8px; height: 200px;
     }
     /* Watermark */
     .watermark {
