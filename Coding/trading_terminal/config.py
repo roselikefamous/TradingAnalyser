@@ -28,6 +28,15 @@ class Settings:
     def drift_z_threshold(self) -> float:
         return float(self._get_secret_or_env("DRIFT_Z_THRESHOLD", "3.0"))
 
+    # Trading 212 Settings
+    @property
+    def t212_id(self) -> Optional[str]:
+        return self._get_secret_or_env("T212_ID")
+
+    @property
+    def t212_api_key(self) -> Optional[str]:
+        return self._get_secret_or_env("T212_API_KEY")
+
     # UI / App Settings
     @property
     def app_name(self) -> str:
@@ -35,8 +44,13 @@ class Settings:
 
     def _get_secret_or_env(self, key: str, default: Any = None) -> Any:
         # Check Streamlit Secrets first
-        if key in st.secrets:
-            return st.secrets[key]
+        try:
+            if key in st.secrets:
+                return st.secrets[key]
+        except Exception:
+            # st.secrets might raise an error if not configured
+            pass
+            
         # Fallback to Environment Variables
         return os.getenv(key, default)
 

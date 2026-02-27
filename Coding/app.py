@@ -290,10 +290,7 @@ if market_data is None or market_data.df is None or len(market_data.df) == 0:
     st.error(f"❌ Keine Daten für das Symbol '{st.session_state.tickers[0]}' gefunden. Bitte überprüfe die Schreibweise.")
     if st.button("🔄 Zurück setzen (Reset)", type="primary"):
         st.session_state.tickers[0] = "AAPL"
-        if "custom_ticker_input" in st.session_state:
-            st.session_state["custom_ticker_input"] = ""
-        if "quick_search_bar" in st.session_state:
-            st.session_state["quick_search_bar"] = ""
+        # We don't modify custom_ticker_input or other widget keys directly
         st.rerun()
     st.stop()
 

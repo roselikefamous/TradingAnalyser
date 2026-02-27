@@ -7,8 +7,14 @@ class YFinanceProvider(DataProviderInterface):
     """Implementation of DataProviderInterface using yfinance."""
 
     def fetch_history(self, symbol: str, period: str, interval: str) -> pd.DataFrame:
-        t = yf.Ticker(symbol)
-        return t.history(period=period, interval=interval)
+        try:
+            t = yf.Ticker(symbol)
+            df = t.history(period=period, interval=interval)
+            if df is None or df.empty:
+                return pd.DataFrame()
+            return df
+        except Exception:
+            return pd.DataFrame()
 
     def fetch_info(self, symbol: str) -> dict[str, Any]:
         try:

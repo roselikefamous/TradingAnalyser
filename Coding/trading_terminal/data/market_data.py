@@ -7,7 +7,9 @@ from trading_terminal.contracts import MarketDataBundle
 from trading_terminal.indicators import apply_core_indicators
 from trading_terminal.data.yf_provider import YFinanceProvider
 from trading_terminal.data.alpaca_provider import AlpacaProvider
+from trading_terminal.data.t212_provider import Trading212Provider
 from trading_terminal.config import settings
+from trading_terminal.utils.logger import structured_logger
 
 
 def get_provider():
@@ -16,10 +18,14 @@ def get_provider():
     
     if provider_name == "alpaca":
         return AlpacaProvider()
+    if provider_name == "t212":
+        if not settings.t212_api_key:
+            structured_logger.warning(
+                "TRADING_DATA_PROVIDER=t212 but T212_API_KEY is missing. Falling back to yfinance."
+            )
+            return YFinanceProvider()
+        return Trading212Provider()
     return YFinanceProvider()
-
-
-from trading_terminal.utils.logger import structured_logger
 
 @st.cache_data(ttl=120)
 def fetch_market_data(ticker: str, period: str, interval: str) -> Optional[MarketDataBundle]:
