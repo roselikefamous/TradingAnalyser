@@ -81,16 +81,16 @@ def strategy_bollinger_scalping(df: pd.DataFrame):
             continue
 
         if not in_trade:
-            # Check conditions for entry
+            # --- LONG ENTRY ---
             is_uptrend = df_s['Trend_Up'].iloc[i - 1]
             touched_lower_bb = df_s['Low'].iloc[i - 1] <= df_s['BB_Lower'].iloc[i - 1]
             bullish_candle = df_s['Close'].iloc[i] > df_s['Open'].iloc[i]
             stoch_oversold = df_s['Stoch_K'].iloc[i] < 30 if not pd.isna(df_s['Stoch_K'].iloc[i]) else False
 
             if is_uptrend and touched_lower_bb and bullish_candle:
-                entry_price = df_s['High'].iloc[i]  # Stop-Buy above high
-                sl_price = min(df_s['Low'].iloc[max(0, i - 2):i + 1])  # Below recent lows
-                tp_price = df_s['BB_Mid'].iloc[i]  # Target: BB middle
+                entry_price = df_s['High'].iloc[i]
+                sl_price = min(df_s['Low'].iloc[max(0, i - 2):i + 1])
+                tp_price = df_s['BB_Mid'].iloc[i]
 
                 entries.append({
                     'Date': df_s.index[i],
@@ -101,36 +101,56 @@ def strategy_bollinger_scalping(df: pd.DataFrame):
                     'StochConfirm': stoch_oversold,
                 })
                 in_trade = True
+                trade_type = 'LONG'
+                trade_entry_price = entry_price
+                trade_sl = sl_price
+            
+            # --- SHORT ENTRY ---
+            is_downtrend = not df_s['Trend_Up'].iloc[i - 1]
+            touched_upper_bb = df_s['High'].iloc[i - 1] >= df_s['BB_Upper'].iloc[i - 1]
+            bearish_candle = df_s['Close'].iloc[i] < df_s['Open'].iloc[i]
+            stoch_overbought = df_s['Stoch_K'].iloc[i] > 70 if not pd.isna(df_s['Stoch_K'].iloc[i]) else False
+
+            if is_downtrend and touched_upper_bb and bearish_candle:
+                entry_price = df_s['Low'].iloc[i]
+                sl_price = max(df_s['High'].iloc[max(0, i - 2):i + 1])
+                tp_price = df_s['BB_Mid'].iloc[i]
+
+                entries.append({
+                    'Date': df_s.index[i],
+                    'Entry': entry_price,
+                    'SL': sl_price,
+                    'TP': tp_price,
+                    'Type': 'SHORT',
+                    'StochConfirm': stoch_overbought,
+                })
+                in_trade = True
+                trade_type = 'SHORT'
                 trade_entry_price = entry_price
                 trade_sl = sl_price
         else:
             # Check exit conditions
-            # Trailing stop: low of 3rd-from-last candle
-            trailing_sl = df_s['Low'].iloc[max(0, i - 3)] if i >= 3 else trade_sl
+            if trade_type == 'LONG':
+                trailing_sl = df_s['Low'].iloc[max(0, i - 3)] if i >= 3 else trade_sl
+                current_sl = max(trade_sl, trailing_sl)
+                if df_s['High'].iloc[i] >= df_s['BB_Mid'].iloc[i]:
+                    exits.append({'Date': df_s.index[i], 'Price': df_s['BB_Mid'].iloc[i], 'Reason': 'TP (BB Mid)'})
+                    in_trade = False
+                elif df_s['Low'].iloc[i] <= current_sl:
+                    exits.append({'Date': df_s.index[i], 'Price': current_sl, 'Reason': 'SL Hit'})
+                    in_trade = False
+            else: # SHORT
+                trailing_sl = df_s['High'].iloc[max(0, i - 3)] if i >= 3 else trade_sl
+                current_sl = min(trade_sl, trailing_sl)
+                if df_s['Low'].iloc[i] <= df_s['BB_Mid'].iloc[i]:
+                    exits.append({'Date': df_s.index[i], 'Price': df_s['BB_Mid'].iloc[i], 'Reason': 'TP (BB Mid)'})
+                    in_trade = False
+                elif df_s['High'].iloc[i] >= current_sl:
+                    exits.append({'Date': df_s.index[i], 'Price': current_sl, 'Reason': 'SL Hit'})
+                    in_trade = False
 
-            # Update SL if trailing is higher (break-even logic)
-            current_sl = max(trade_sl, trailing_sl)
-
-            # Exit at BB Mid (take profit target)
-            if df_s['High'].iloc[i] >= df_s['BB_Mid'].iloc[i]:
-                exits.append({
-                    'Date': df_s.index[i],
-                    'Price': df_s['BB_Mid'].iloc[i],
-                    'Reason': 'TP (BB Mid)',
-                })
-                in_trade = False
-            # Exit if SL hit
-            elif df_s['Low'].iloc[i] <= current_sl:
-                exits.append({
-                    'Date': df_s.index[i],
-                    'Price': current_sl,
-                    'Reason': 'SL Hit',
-                })
-                in_trade = False
-
-    # Backtest stats
-    backtest = _calc_backtest_stats(entries, exits, 'LONG')
-
+    backtest = _calc_backtest_stats_mixed([e for e in entries if e['Type'] == 'SHORT'], 
+                                          [e for e in entries if e['Type'] == 'LONG'], df_s)
     return entries, exits, backtest, df_s
 
 
@@ -275,78 +295,90 @@ def strategy_fibonacci_swing(df: pd.DataFrame, lookback=60):
 
     # Detect patterns
     hammers = detect_hammer(df)
-    engulfings = detect_bullish_engulfing(df)
+    engulf_bull = detect_bullish_engulfing(df)
     haramis = detect_harami(df)
+    shooting_stars = detect_shooting_star(df)
+    engulf_bear = detect_bearish_engulfing(df)
 
     fib_entries = []
     exits = []
     in_trade = False
     trade_entry = 0
+    trade_type = 'LONG'
 
+    # Determine major trend direction based on swing order
+    is_major_trend_up = swing_high_idx > swing_low_idx
+    
     for i in range(2, len(df)):
         if fib_diff <= 0:
             break
 
-        low = df['Low'].iloc[i]
+        if not in_trade:
+            # --- LONG SETUP (Awaiting Bullish Retracement) ---
+            if is_major_trend_up:
+                low = df['Low'].iloc[i]
+                near_50 = abs(low - fib_500) / fib_diff < 0.025
+                near_618 = abs(low - fib_618) / fib_diff < 0.025
 
-        # Is price near 50% or 61.8% level?
-        near_50 = abs(low - fib_500) / fib_diff < 0.025
-        near_618 = abs(low - fib_618) / fib_diff < 0.025
+                if (near_50 or near_618):
+                    has_pattern = hammers.iloc[i] or engulf_bull.iloc[i] or haramis.iloc[i]
+                    if has_pattern:
+                        if i + 1 < len(df) and df['High'].iloc[i + 1] > df['High'].iloc[i]:
+                            entry_price = df['High'].iloc[i]
+                            sl_price = min(df['Low'].iloc[max(0, i - 3):i + 1])
+                            pattern = 'Hammer' if hammers.iloc[i] else 'Engulfing' if engulf_bull.iloc[i] else 'Harami'
+                            fib_entries.append({
+                                'Date': df.index[i], 'Entry': entry_price, 'SL': sl_price,
+                                'Level': '50.0%' if near_50 else '61.8%', 'Pattern': pattern, 'Type': 'LONG'
+                            })
+                            in_trade, trade_entry, trade_type = True, entry_price, 'LONG'
+            
+            # --- SHORT SETUP (Awaiting Bearish Retracement) ---
+            else:
+                high = df['High'].iloc[i]
+                near_50 = abs(high - fib_500) / fib_diff < 0.025
+                near_618 = abs(high - fib_618) / fib_diff < 0.025
 
-        if (near_50 or near_618) and not in_trade:
-            has_pattern = hammers.iloc[i] or engulfings.iloc[i] or haramis.iloc[i]
+                if (near_50 or near_618):
+                    has_pattern = shooting_stars.iloc[i] or engulf_bear.iloc[i]
+                    if has_pattern:
+                        if i + 1 < len(df) and df['Low'].iloc[i + 1] < df['Low'].iloc[i]:
+                            entry_price = df['Low'].iloc[i]
+                            sl_price = max(df['High'].iloc[max(0, i - 3):i + 1])
+                            pattern = 'Shooting Star' if shooting_stars.iloc[i] else 'Bearish Engulfing'
+                            fib_entries.append({
+                                'Date': df.index[i], 'Entry': entry_price, 'SL': sl_price,
+                                'Level': '50.0%' if near_50 else '61.8%', 'Pattern': pattern, 'Type': 'SHORT'
+                            })
+                            in_trade, trade_entry, trade_type = True, entry_price, 'SHORT'
 
-            if has_pattern:
-                # Confirmation: price must exceed previous day's high
-                if i + 1 < len(df) and df['High'].iloc[i + 1] > df['High'].iloc[i]:
-                    entry_price = df['High'].iloc[i]  # Entry above pattern candle high
-                    sl_price = min(df['Low'].iloc[max(0, i - 3):i + 1])  # Below correction low
-
-                    # Determine which pattern was found
-                    pattern = 'Hammer' if hammers.iloc[i] else 'Engulfing' if engulfings.iloc[i] else 'Harami'
-
-                    fib_entries.append({
-                        'Date': df.index[i],
-                        'Entry': entry_price,
-                        'SL': sl_price,
-                        'Level': '50.0%' if near_50 else '61.8%',
-                        'Pattern': pattern,
-                        'Type': 'LONG',
-                    })
-                    in_trade = True
-                    trade_entry = entry_price
-
-        # Trailing stop for open trades: low of last 3-4 bars
+        # Trailing stop and targets
         if in_trade and i >= 4:
-            trailing_sl = min(df['Low'].iloc[i - 3:i + 1])
-            # Check if trailing SL is hit
-            if df['Low'].iloc[i] < trailing_sl and df['Low'].iloc[i] < trade_entry:
-                exits.append({
-                    'Date': df.index[i],
-                    'Price': trailing_sl,
-                    'Reason': 'Trailing SL (3-4 bar low)',
-                })
-                in_trade = False
-            # Check if extension target hit
-            elif df['High'].iloc[i] >= extensions.get('127.2%', swing_high * 1.1):
-                exits.append({
-                    'Date': df.index[i],
-                    'Price': extensions['127.2%'],
-                    'Reason': 'TP (Fib 127.2% Extension)',
-                })
-                in_trade = False
+            if trade_type == 'LONG':
+                trailing_sl = min(df['Low'].iloc[i - 3:i + 1])
+                if df['Low'].iloc[i] < trailing_sl and df['Low'].iloc[i] < trade_entry:
+                    exits.append({'Date': df.index[i], 'Price': trailing_sl, 'Reason': 'Trailing SL'})
+                    in_trade = False
+                elif df['High'].iloc[i] >= extensions.get('127.2%', swing_high * 1.1):
+                    exits.append({'Date': df.index[i], 'Price': extensions.get('127.2%', swing_high * 1.1), 'Reason': 'TP (Fib 127.2%)'})
+                    in_trade = False
+            else: # SHORT
+                trailing_sl = max(df['High'].iloc[i - 3:i + 1])
+                if df['High'].iloc[i] > trailing_sl and df['High'].iloc[i] > trade_entry:
+                    exits.append({'Date': df.index[i], 'Price': trailing_sl, 'Reason': 'Trailing SL'})
+                    in_trade = False
+                elif df['Low'].iloc[i] <= extensions.get('127.2%', swing_low * 0.9):
+                    exits.append({'Date': df.index[i], 'Price': extensions.get('127.2%', swing_low * 0.9), 'Reason': 'TP (Fib 127.2%)'})
+                    in_trade = False
 
-    backtest = _calc_backtest_stats(fib_entries, exits, 'LONG')
+    backtest = _calc_backtest_stats_mixed([e for e in fib_entries if e['Type'] == 'SHORT'], 
+                                          [e for e in fib_entries if e['Type'] == 'LONG'], df)
 
     fib_data = {
-        'swing_high': swing_high,
-        'swing_low': swing_low,
-        'swing_high_idx': swing_high_idx,
-        'swing_low_idx': swing_low_idx,
-        'retracements': retracements,
-        'extensions': extensions,
+        'swing_high': swing_high, 'swing_low': swing_low,
+        'swing_high_idx': swing_high_idx, 'swing_low_idx': swing_low_idx,
+        'retracements': retracements, 'extensions': extensions,
     }
-
     return fib_entries, exits, backtest, df, fib_data
 
 

@@ -7,17 +7,19 @@ from trading_terminal.contracts import MarketDataBundle
 from trading_terminal.indicators import apply_core_indicators
 from trading_terminal.data.yf_provider import YFinanceProvider
 from trading_terminal.data.alpaca_provider import AlpacaProvider
+from trading_terminal.config import settings
 
 
 def get_provider():
     """Simple factory to return the configured data provider."""
-    # In a real app, this could come from a config file or st.secrets
-    provider_name = os.getenv("TRADING_DATA_PROVIDER", "yfinance").lower()
+    provider_name = settings.data_provider
     
     if provider_name == "alpaca":
         return AlpacaProvider()
     return YFinanceProvider()
 
+
+from trading_terminal.utils.logger import structured_logger
 
 @st.cache_data(ttl=120)
 def fetch_market_data(ticker: str, period: str, interval: str) -> Optional[MarketDataBundle]:
@@ -26,6 +28,7 @@ def fetch_market_data(ticker: str, period: str, interval: str) -> Optional[Marke
         
         df = provider.fetch_history(ticker, period, interval)
         if df is None or df.empty:
+            structured_logger.warning(f"No data returned for ticker: {ticker}")
             return None
 
         info = provider.fetch_info(ticker)
@@ -40,7 +43,8 @@ def fetch_market_data(ticker: str, period: str, interval: str) -> Optional[Marke
             dividends=dividends,
             earnings_dates=earnings_dates,
         )
-    except Exception:
+    except Exception as e:
+        structured_logger.error(f"Error fetching data for {ticker}: {str(e)}")
         return None
 
 

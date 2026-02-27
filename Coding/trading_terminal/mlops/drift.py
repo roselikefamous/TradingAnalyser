@@ -15,11 +15,13 @@ class DriftReport:
     is_drifting: bool
 
 
+from trading_terminal.config import settings
+
 class FeatureDriftDetector:
     """Detects distribution drift between historical backtest data and live data."""
     
-    def __init__(self, z_score_threshold: float = 3.0):
-        self.zs_threshold = z_score_threshold
+    def __init__(self, z_score_threshold: float = None):
+        self.zs_threshold = z_score_threshold if z_score_threshold is not None else settings.drift_z_threshold
         # Stores reference distributions extracted from Walk-Forward
         self.reference_stats: dict[str, dict[str, float]] = {}
 

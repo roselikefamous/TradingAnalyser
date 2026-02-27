@@ -223,17 +223,17 @@ STRATEGY_DOC = """
 
 ---
 
-### 1️⃣ Bollinger Band Scalping (Schnelle Gewinne im Trend)
+### 1️⃣ Bollinger Band Scalping (Trends & Breakouts)
 
 | Parameter | Regel |
 |---|---|
 | **Zeitrahmen** | 5-Min Chart (Entry), Tageschart (Trendrichtung) |
 | **Indikatoren** | Bollinger Bänder (20, 2σ), EMA 55, Stochastik |
-| **Trend-Filter** | EMA 55 muss steigen → Nur LONG Trades |
-| **Entry** | Kurs berührt unteres BB → bullische Kerze → Stop-Buy über dem Hoch |
-| **Stop-Loss** | Unter dem signifikanten Tief der letzten 3 Kerzen |
-| **Take Profit** | Nach +10 Pips → SL auf Break-Even. Trailing am Tief der 3.-letzten Kerze |
-| **Stochastik** | %K < 30 (überverkauft) = zusätzliche Bestätigung |
+| **Long-Setup** | EMA 55 steigt + Kurs berührt unteres BB + bullische Kerze |
+| **Short-Setup** | EMA 55 fällt + Kurs berührt oberes BB + bärische Kerze |
+| **Entry** | Über/Unter dem Hoch/Tief der Bestätigungskerze |
+| **Stop-Loss** | Über/Unter dem signifikanten High/Low der letzten 3 Kerzen |
+| **Take Profit** | BB Mittellinie oder Trailing Stop |
 
 ---
 
@@ -259,12 +259,11 @@ STRATEGY_DOC = """
 |---|---|
 | **Zeitrahmen** | Tageschart |
 | **Indikatoren** | Fibonacci Retracement (50%/61.8%), Candlestick-Muster |
-| **Setup** | Aufwärtstrend → Korrektur auf 50% oder 61.8% Fibonacci-Level |
-| **Confirmation** | Hammer, Bullish Engulfing, oder Harami am Fibonacci-Level |
-| **Entry** | Kaufe erst, wenn der Kurs das Hoch der Vortags-Kerze übersteigt! |
-| **Stop-Loss** | Unter dem tiefsten Tief der Korrektur |
-| **Take Profit** | Trailing-SL unter dem Tief der letzten 3-4 Tage |
-| **Extensions** | Fibonacci 127.2% und 161.8% als Gewinnziele |
+| **Long-Setup** | Aufwärtstrend → Korrektur auf 50%/61.8% Support + bullische Kerze |
+| **Short-Setup** | Abwärtstrend → Erholung auf 50%/61.8% Resistance + bärische Kerze |
+| **Entry** | Bruch des Vorperioden Highs (Long) oder Lows (Short) |
+| **Stop-Loss** | Über/Unter dem Swing High/Low der Korrektur |
+| **Take Profit** | Extensions (127.2%, 161.8%) oder Trailing 3-Tage Tief/Hoch |
 
 ---
 

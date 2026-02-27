@@ -31,6 +31,7 @@ from streamlit_autorefresh import st_autorefresh
 from simulation import (
     new_simulation_state
 )
+from trading_terminal.utils.logger import structured_logger, log_error, log_trade_event
 
 st.set_page_config(page_title="Pro Trading Terminal", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(TERMINAL_CSS, unsafe_allow_html=True)
@@ -83,7 +84,7 @@ for _pos in _sim.get('positions', []):
                 st.toast(f"🎯 TP erreicht! {_sym} stieg auf ${_cur:.2f} (TP war ${_pos['tp']:.2f})", icon="🟢")
                 st.session_state.sltp_alerted.add(_alert_key)
     except Exception as e:
-        pass
+        log_error("ALERT_FAILURE", f"Failed to check SL/TP for {_sym}: {str(e)}")
 
 # ── Phase 8: Morning Auto-Scan (09:00–10:00 once per day) ─────────────────────
 _today_str = now.strftime("%Y-%m-%d")
@@ -574,11 +575,11 @@ if active_page == "📈 Chart & Setup":
                 _bc_color = '#00e676'; _b_icon = '🟢'; _b_action = 'KAUFEN'
                 _b_msg = f'KAUFE bei ${_banner_entry:,.2f} • SL ${_banner_sl:,.2f} • TP ${_banner_tp:,.2f} • {_pos_shares} Anteile • Risiko €{_risk2:.0f}'
             elif _banner_sc <= -3:
-                _bc_color = '#ff1744'; _b_icon = '🔴'; _b_action = 'NICHT KAUFEN'
-                _b_msg = f'Abwärtstrend • SL ${_banner_sl:,.2f} • Ziel ${_banner_tp:,.2f} • Risiko €{_risk2:.0f}'
+                _bc_color = '#ff1744'; _b_icon = '🔴'; _b_action = 'VERKAUFEN (SHORT)'
+                _b_msg = f'SHORT bei ${_banner_entry:,.2f} • SL ${_banner_sl:,.2f} • TP ${_banner_tp:,.2f} • {_pos_shares} Anteile • Risiko €{_risk2:.0f}'
             else:
                 _bc_color = '#ffea00'; _b_icon = '🟡'; _b_action = 'ABWARTEN'
-                _b_msg = f'Kein klares Signal. Warte auf Score ≥3. RSI: {_banner_rsi:.0f}'
+                _b_msg = f'Kein klares Signal. Warte auf Score ≥3 oder ≤-3. RSI: {_banner_rsi:.0f}'
             st.markdown(f"""
             <div style='background:linear-gradient(90deg, rgba(30,30,40,0.85), rgba(20,20,30,0.9));
                         border:2px solid {_bc_color}; border-radius:12px;

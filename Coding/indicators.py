@@ -4,6 +4,7 @@ All indicator calculations for the Trading Terminal.
 """
 import numpy as np
 import pandas as pd
+from numba import njit
 
 
 # ═══════════════════════════════════════════════════════════
@@ -51,13 +52,9 @@ def calc_ichimoku(df: pd.DataFrame, tenkan=9, kijun=26, senkou_b=52):
     return tenkan_sen, kijun_sen, senkou_a, senkou_b_line, chikou
 
 
-def calc_parabolic_sar(df: pd.DataFrame, af_start=0.02, af_step=0.02, af_max=0.2):
-    """Parabolic SAR (Wilder's method)."""
-    high = df['High'].values
-    low = df['Low'].values
-    close = df['Close'].values
-    n = len(df)
-
+@njit
+def _parabolic_sar_numba(high, low, af_start, af_step, af_max):
+    n = len(high)
     sar = np.zeros(n)
     af = af_start
     uptrend = True
@@ -95,46 +92,60 @@ def calc_parabolic_sar(df: pd.DataFrame, af_start=0.02, af_step=0.02, af_max=0.2
                 if low[i] < ep:
                     ep = low[i]
                     af = min(af + af_step, af_max)
+    return sar
 
+
+def calc_parabolic_sar(df: pd.DataFrame, af_start=0.02, af_step=0.02, af_max=0.2):
+    """Parabolic SAR (Wilder's method) accelerated with Numba."""
+    high = df['High'].values
+    low = df['Low'].values
+    sar = _parabolic_sar_numba(high, low, af_start, af_step, af_max)
     return pd.Series(sar, index=df.index, name='SAR')
 
 
-def calc_supertrend(df: pd.DataFrame, period=10, multiplier=3.0):
-    """SuperTrend indicator."""
-    atr = calc_atr(df, period)
-    hl2 = (df['High'] + df['Low']) / 2
-    upper_band = hl2 + multiplier * atr
-    lower_band = hl2 - multiplier * atr
-
-    supertrend = pd.Series(np.nan, index=df.index)
-    direction = pd.Series(1, index=df.index)  # 1 = up, -1 = down
-
-    for i in range(period, len(df)):
-        if i == period:
-            supertrend.iloc[i] = lower_band.iloc[i]
-            direction.iloc[i] = 1
-            continue
-
-        if direction.iloc[i - 1] == 1:
+@njit
+def _supertrend_numba(close, upper_band, lower_band, period):
+    n = len(close)
+    supertrend = np.full(n, np.nan)
+    direction = np.ones(n) # 1 = up, -1 = down
+    
+    supertrend[period] = lower_band[period]
+    direction[period] = 1
+    
+    for i in range(period + 1, n):
+        if direction[i - 1] == 1:
             # Was in uptrend
-            supertrend.iloc[i] = max(lower_band.iloc[i],
-                                      supertrend.iloc[i - 1]) if not pd.isna(supertrend.iloc[i - 1]) else lower_band.iloc[i]
-            if df['Close'].iloc[i] < supertrend.iloc[i]:
-                direction.iloc[i] = -1
-                supertrend.iloc[i] = upper_band.iloc[i]
+            prev_st = supertrend[i - 1]
+            supertrend[i] = max(lower_band[i], prev_st)
+            if close[i] < supertrend[i]:
+                direction[i] = -1
+                supertrend[i] = upper_band[i]
             else:
-                direction.iloc[i] = 1
+                direction[i] = 1
         else:
             # Was in downtrend
-            supertrend.iloc[i] = min(upper_band.iloc[i],
-                                      supertrend.iloc[i - 1]) if not pd.isna(supertrend.iloc[i - 1]) else upper_band.iloc[i]
-            if df['Close'].iloc[i] > supertrend.iloc[i]:
-                direction.iloc[i] = 1
-                supertrend.iloc[i] = lower_band.iloc[i]
+            prev_st = supertrend[i - 1]
+            supertrend[i] = min(upper_band[i], prev_st)
+            if close[i] > supertrend[i]:
+                direction[i] = 1
+                supertrend[i] = lower_band[i]
             else:
-                direction.iloc[i] = -1
-
+                direction[i] = -1
     return supertrend, direction
+
+
+def calc_supertrend(df: pd.DataFrame, period=10, multiplier=3.0):
+    """SuperTrend indicator accelerated with Numba."""
+    atr = calc_atr(df, period)
+    hl2 = (df['High'] + df['Low']) / 2
+    upper_band = (hl2 + multiplier * atr).values
+    lower_band = (hl2 - multiplier * atr).values
+    close = df['Close'].values
+    
+    st_values, dir_values = _supertrend_numba(close, upper_band, lower_band, period)
+    
+    return pd.Series(st_values, index=df.index, name='SuperTrend'), \
+           pd.Series(dir_values, index=df.index, name='Direction')
 
 
 # ═══════════════════════════════════════════════════════════
@@ -199,19 +210,45 @@ def calc_obv(df: pd.DataFrame) -> pd.Series:
     return (np.sign(df['Close'].diff()) * df['Volume']).fillna(0).cumsum()
 
 
+@njit
+def _volume_profile_numba(highs, lows, volumes_in, price_bins, bins, price_range):
+    volumes_out = np.zeros(bins)
+    bin_size = price_range / bins
+    
+    for i in range(len(highs)):
+        h = highs[i]
+        l = lows[i]
+        v = volumes_in[i]
+        
+        # Calculate weight distributed across overlapping bins
+        span = h - l
+        weight = v / max(1.0, span / bin_size) if span > 0 else v
+        
+        for j in range(bins):
+            if l <= price_bins[j + 1] and h >= price_bins[j]:
+                volumes_out[j] += weight
+                
+    return volumes_out
+
+
 def calc_volume_profile(df: pd.DataFrame, bins=30):
-    """Volume Profile – price bins and accumulated volume.
-    Returns (price_levels, volumes) for horizontal histogram.
-    """
+    """Volume Profile accelerated with Numba."""
     price_min = df['Low'].min()
     price_max = df['High'].max()
     price_bins = np.linspace(price_min, price_max, bins + 1)
-    volumes = np.zeros(bins)
+    price_range = price_max - price_min
+    
+    if price_range == 0:
+        return (price_bins[:-1] + price_bins[1:]) / 2, np.zeros(bins)
 
-    for _, row in df.iterrows():
-        for j in range(bins):
-            if row['Low'] <= price_bins[j + 1] and row['High'] >= price_bins[j]:
-                volumes[j] += row['Volume'] / max(1, int((row['High'] - row['Low']) / ((price_max - price_min) / bins)))
+    volumes = _volume_profile_numba(
+        df['High'].values, 
+        df['Low'].values, 
+        df['Volume'].values, 
+        price_bins, 
+        bins, 
+        price_range
+    )
 
     price_levels = (price_bins[:-1] + price_bins[1:]) / 2
     return price_levels, volumes
@@ -336,57 +373,72 @@ def detect_shooting_star(df: pd.DataFrame) -> pd.Series:
 
 def detect_bullish_engulfing(df: pd.DataFrame) -> pd.Series:
     """Bullish Engulfing: current bullish candle engulfs previous bearish candle."""
-    result = pd.Series(False, index=df.index)
-    for i in range(1, len(df)):
-        c_open, c_close = df['Open'].iloc[i], df['Close'].iloc[i]
-        p_open, p_close = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
-        if c_close > c_open and p_close < p_open and c_close > p_open and c_open < p_close:
-            result.iloc[i] = True
-    return result
+    c_open, c_close = df['Open'], df['Close']
+    p_open, p_close = df['Open'].shift(1), df['Close'].shift(1)
+    
+    pattern = (c_close > c_open) & (p_close < p_open) & (c_close > p_open) & (c_open < p_close)
+    return pattern.fillna(False)
 
 
 def detect_bearish_engulfing(df: pd.DataFrame) -> pd.Series:
     """Bearish Engulfing: current bearish candle engulfs previous bullish candle."""
-    result = pd.Series(False, index=df.index)
-    for i in range(1, len(df)):
-        c_open, c_close = df['Open'].iloc[i], df['Close'].iloc[i]
-        p_open, p_close = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
-        if c_close < c_open and p_close > p_open and c_open > p_close and c_close < p_open:
-            result.iloc[i] = True
-    return result
+    c_open, c_close = df['Open'], df['Close']
+    p_open, p_close = df['Open'].shift(1), df['Close'].shift(1)
+    
+    pattern = (c_close < c_open) & (p_close > p_open) & (c_open > p_close) & (c_close < p_open)
+    return pattern.fillna(False)
 
 
 def detect_harami(df: pd.DataFrame) -> pd.Series:
     """Bullish Harami: small body within previous large bearish body."""
-    result = pd.Series(False, index=df.index)
-    for i in range(1, len(df)):
-        c_open, c_close = df['Open'].iloc[i], df['Close'].iloc[i]
-        p_open, p_close = df['Open'].iloc[i - 1], df['Close'].iloc[i - 1]
-        c_body = abs(c_close - c_open)
-        p_body = abs(p_close - p_open)
-        if (p_close < p_open  # previous bearish
-                and c_close > c_open  # current bullish
-                and max(c_open, c_close) < p_open
-                and min(c_open, c_close) > p_close
-                and c_body < p_body * 0.5):
-            result.iloc[i] = True
-    return result
+    c_open, c_close = df['Open'], df['Close']
+    p_open, p_close = df['Open'].shift(1), df['Close'].shift(1)
+    c_body = (c_close - c_open).abs()
+    p_body = (p_close - p_open).abs()
+    
+    pattern = (p_close < p_open) & (c_close > c_open) & \
+              (c_close.combine(c_open, max) < p_open) & \
+              (c_close.combine(c_open, min) > p_close) & \
+              (c_body < p_body * 0.5)
+              
+    return pattern.fillna(False)
 
 
 # ═══════════════════════════════════════════════════════════
 # 7. HEIKIN-ASHI
 # ═══════════════════════════════════════════════════════════
 
+@njit
+def _heikin_ashi_numba(opens, highs, lows, closes):
+    n = len(opens)
+    ha_open = np.zeros(n)
+    ha_close = (opens + highs + lows + closes) / 4
+    
+    ha_open[0] = (opens[0] + closes[0]) / 2
+    for i in range(1, n):
+        ha_open[i] = (ha_open[i - 1] + ha_close[i - 1]) / 2
+        
+    ha_high = np.maximum(np.maximum(ha_open, ha_close), highs)
+    ha_low = np.minimum(np.minimum(ha_open, ha_close), lows)
+    
+    return ha_open, ha_high, ha_low, ha_close
+
+
 def calc_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
-    """Calculate Heikin-Ashi candles."""
-    ha = df.copy()
-    ha['Close'] = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    ha['Open'] = 0.0
-    ha.iloc[0, ha.columns.get_loc('Open')] = (df['Open'].iloc[0] + df['Close'].iloc[0]) / 2
-    for i in range(1, len(df)):
-        ha.iloc[i, ha.columns.get_loc('Open')] = (ha['Open'].iloc[i - 1] + ha['Close'].iloc[i - 1]) / 2
-    ha['High'] = ha[['Open', 'Close', 'High']].max(axis=1)
-    ha['Low'] = ha[['Open', 'Close', 'Low']].min(axis=1)
+    """Calculate Heikin-Ashi candles accelerated with Numba."""
+    opens = df['Open'].values
+    highs = df['High'].values
+    lows = df['Low'].values
+    closes = df['Close'].values
+    
+    ha_open, ha_high, ha_low, ha_close = _heikin_ashi_numba(opens, highs, lows, closes)
+    
+    ha = pd.DataFrame({
+        'Open': ha_open,
+        'High': ha_high,
+        'Low': ha_low,
+        'Close': ha_close
+    }, index=df.index)
     return ha
 
 

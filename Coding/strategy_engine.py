@@ -266,15 +266,18 @@ def calculate_smart_entry_zone(df: pd.DataFrame) -> dict:
         target_3 = max(target_2 + atr_now*1.5, last_price + atr_now*4)
     elif is_bearish:
         direction, d_emoji, d_color = "SHORT", "🔴", "#ff1744"
+        # Sell zone: between price and nearest resistance/EMA
         entry_low = last_price if regime == "TRENDING" else max(last_price, last_bb_mid)
         entry_high = max(last_ema1, last_ema2) if regime == "TRENDING" else min(nearest_resistance, last_bb_upper)
         if entry_high <= entry_low: entry_low, entry_high = last_price, last_price + atr_now*0.5
-        sl_level = max(nearest_resistance + atr_now*0.5, entry_high + atr_now*1.5)
+        # Stop-Loss: above nearest resistance
+        sl_level = max(nearest_resistance + atr_now*0.75, entry_high + atr_now*1.5)
+        # Targets: below current price
         target_1, target_2 = nearest_support, second_support
         target_3 = min(target_2 - atr_now*1.5, last_price - atr_now*4)
     else:
-        direction, d_emoji, d_color = "ABWARTEN", "🟡", "#ffea00"
-        entry_low, entry_high = nearest_support, nearest_support + atr_now*0.3
+        direction, d_emoji, d_color = "NEUTRAL", "🟡", "#ffea00"
+        entry_low, entry_high = last_price - atr_now*0.5, last_price + atr_now*0.5
         sl_level = nearest_support - atr_now*1.5
         target_1, target_2 = nearest_resistance, second_resistance if second_resistance > nearest_resistance else nearest_resistance + atr_now*2
         target_3 = target_2 + atr_now*1.5
